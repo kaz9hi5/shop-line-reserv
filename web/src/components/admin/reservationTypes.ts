@@ -3,11 +3,13 @@ export type AdminReservation = {
   dateYmd: string; // YYYY-MM-DD
   time: string; // HH:mm
   name: string;
-  phoneLast4: string;
+  lineUserId: string; // LINE ユーザー ID
+  lineDisplayName?: string; // LINE 表示名（任意）
   menu: string;
   durationMinutes: number;
   priceYen: number;
-  via?: "web" | "phone";
+  via?: "web" | "phone" | "admin";
+  arrivedAt?: string; // ISO string
 };
 
 

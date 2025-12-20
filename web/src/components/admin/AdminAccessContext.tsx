@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { getAllowedIps, isIpAllowed, logAdminAccess, isAccessLogEnabled } from "@/lib/access-logs";
 
 export type AccessLogItem = {
   id: string;
@@ -61,60 +62,75 @@ export function AdminAccessProvider({ children }: { children: React.ReactNode })
   const [allowedIps, setAllowedIpsState] = useState<string[]>([]);
   const [accessLogEnabled, setAccessLogEnabledState] = useState<boolean>(true);
   const [logs, setLogs] = useState<AccessLogItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isAllowedState, setIsAllowedState] = useState<boolean>(false);
 
-  // load
+  // Load allowed IPs and access log setting
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Persisted;
-      setCurrentIpState(parsed.currentIp ?? "");
-      setAllowedIpsState(Array.isArray(parsed.allowedIps) ? parsed.allowedIps : []);
-      setAccessLogEnabledState(typeof parsed.accessLogEnabled === "boolean" ? parsed.accessLogEnabled : true);
-      setLogs(Array.isArray(parsed.logs) ? parsed.logs : []);
-    } catch {
-      // ignore
+    async function loadData() {
+      try {
+        setLoading(true);
+        const [ips, enabled] = await Promise.all([
+          getAllowedIps(),
+          isAccessLogEnabled()
+        ]);
+        setAllowedIpsState(ips.map((ip) => ip.ip));
+        setAccessLogEnabledState(enabled);
+      } catch (err) {
+        console.error("Failed to load admin access data:", err);
+      } finally {
+        setLoading(false);
+      }
     }
+
+    loadData();
   }, []);
 
-  // persist
+  // Check if IP is allowed
   useEffect(() => {
-    const payload: Persisted = { currentIp, allowedIps, accessLogEnabled, logs };
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(payload));
-    } catch {
-      // ignore
+    async function checkIp() {
+      const ip = normalizeIp(currentIp);
+      if (!ip) {
+        setIsAllowedState(false);
+        return;
+      }
+
+      try {
+        const allowed = await isIpAllowed(ip);
+        setIsAllowedState(allowed);
+      } catch (err) {
+        console.error("Failed to check IP:", err);
+        setIsAllowedState(false);
+      }
     }
-  }, [currentIp, allowedIps, accessLogEnabled, logs]);
 
-  const isAllowed = useMemo(() => {
-    const ip = normalizeIp(currentIp);
-    if (!ip) return false;
-    return allowedIps.includes(ip);
-  }, [allowedIps, currentIp]);
+    if (currentIp && !loading) {
+      checkIp();
+    }
+  }, [currentIp, loading]);
 
-  // log on route/ip/result changes (dedupe)
+  // Log access attempts
   const lastLoggedKeyRef = useRef<string>("");
   useEffect(() => {
-    if (!accessLogEnabled) return;
+    if (!accessLogEnabled || loading) return;
     const ip = normalizeIp(currentIp);
     if (!ip) return;
-    const result: AccessLogItem["result"] = allowedIps.includes(ip) ? "allowed" : "denied";
+
+    const result: AccessLogItem["result"] = isAllowedState ? "allowed" : "denied";
     const key = `${ip}|${pathname}|${result}`;
     if (lastLoggedKeyRef.current === key) return;
     lastLoggedKeyRef.current = key;
 
-    setLogs((prev) => [
-      {
-        id: crypto.randomUUID(),
-        at: nowLabel(),
-        ip,
-        result,
-        path: pathname
-      },
-      ...prev
-    ]);
-  }, [accessLogEnabled, allowedIps, currentIp, pathname]);
+    // Log to DB
+    logAdminAccess({
+      ip,
+      result,
+      path: pathname,
+      user_agent: typeof navigator !== "undefined" ? navigator.userAgent : null
+    }).catch((err) => {
+      console.error("Failed to log access:", err);
+    });
+  }, [accessLogEnabled, isAllowedState, currentIp, pathname, loading]);
 
   const value = useMemo<AdminAccessState>(
     () => ({
@@ -122,21 +138,24 @@ export function AdminAccessProvider({ children }: { children: React.ReactNode })
       allowedIps,
       accessLogEnabled,
       logs,
-      isAllowed,
+      isAllowed: isAllowedState,
       setCurrentIp: (ip) => setCurrentIpState(normalizeIp(ip)),
-      addAllowedIp: (ip) => {
+      addAllowedIp: async (ip) => {
         const v = normalizeIp(ip);
         if (!isValidIpLoose(v)) return;
+        // Note: Actual IP addition is handled in access-logs page
+        // This is just for local state update
         setAllowedIpsState((prev) => (prev.includes(v) ? prev : [...prev, v]));
       },
       removeAllowedIp: (ip) => {
         const v = normalizeIp(ip);
+        // Note: Actual IP removal is handled in access-logs page
         setAllowedIpsState((prev) => prev.filter((x) => x !== v));
       },
       setAccessLogEnabled: (enabled) => setAccessLogEnabledState(enabled),
       clearLogs: () => setLogs([])
     }),
-    [accessLogEnabled, allowedIps, currentIp, isAllowed, logs]
+    [accessLogEnabled, allowedIps, currentIp, isAllowedState, logs]
   );
 
   return <AdminAccessContext.Provider value={value}>{children}</AdminAccessContext.Provider>;

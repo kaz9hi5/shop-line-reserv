@@ -27,7 +27,7 @@ export function ReservationDetailModal({
             onClick={onResendSms}
             className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
           >
-            📩 SMS再送
+            📩 LINEメッセージ再送
           </button>
           <button
             type="button"
@@ -48,7 +48,7 @@ export function ReservationDetailModal({
     >
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="お名前" value={reservation.name} />
-        <Field label="電話番号" value={`****${reservation.phoneLast4}`} />
+        <Field label="LINE表示名" value={reservation.lineDisplayName || "—"} />
         <Field label="日時" value={`${reservation.dateYmd} ${reservation.time}`} />
         <Field label="施術" value={reservation.menu} />
         <Field label="施術時間" value={`${reservation.durationMinutes}分`} />

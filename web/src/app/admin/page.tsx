@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { DayCalendar } from "@/components/admin/DayCalendar";
 import { AdminNav } from "@/components/admin/AdminNav";
@@ -9,6 +9,16 @@ import { MonthCalendar } from "@/components/admin/MonthCalendar";
 import type { AdminReservation } from "@/components/admin/reservationTypes";
 import { ReservationDetailModal } from "@/components/admin/ReservationDetailModal";
 import { ReservationCreateModal } from "@/components/admin/ReservationCreateModal";
+import {
+  getAdminReservationsByDate,
+  getReservedDates,
+  markReservationArrived,
+  cancelReservation,
+  createReservationFromAdmin,
+  changeReservation
+} from "@/lib/reservations";
+import { getTreatments } from "@/lib/treatments";
+import { resendSms } from "@/lib/edge-functions";
 
 const SHOP_NAME = "〇〇ネイルサロン";
 
@@ -25,65 +35,85 @@ export default function AdminPage() {
 
   const ymd = useMemo(() => toYmd(currentDate), [currentDate]);
   const month = useMemo(() => new Date(currentDate.getFullYear(), currentDate.getMonth(), 1), [currentDate]);
-  const reservedDateYmds = useMemo(() => {
-    // NOTE: デザイン用ダミーデータ。後でSupabaseの予約から集計する。
-    const s = new Set<string>();
-    const base = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    s.add(toYmd(new Date())); // today
-    s.add(toYmd(new Date(base.getFullYear(), base.getMonth(), 5)));
-    s.add(toYmd(new Date(base.getFullYear(), base.getMonth(), 12)));
-    s.add(toYmd(new Date(base.getFullYear(), base.getMonth(), 18)));
-    return s;
+
+  const [reservations, setReservations] = useState<AdminReservation[]>([]);
+  const [reservedDateYmds, setReservedDateYmds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load reservations for current date
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadReservations() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const data = await getAdminReservationsByDate(currentDate);
+        if (!cancelled) {
+          setReservations(data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "予約の取得に失敗しました");
+          console.error("Failed to load reservations:", err);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadReservations();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentDate]);
 
-  // NOTE: デザイン確認用の簡易状態。後でSupabaseに置き換える。
-  const [reservationsByDate, setReservationsByDate] = useState<Record<string, AdminReservation[]>>(() => {
-    const today = toYmd(new Date());
-    return {
-      [today]: [
-        {
-          id: "r1",
-          dateYmd: today,
-          time: "10:00",
-          name: "山田様",
-          phoneLast4: "1234",
-          menu: "ジェルネイル",
-          durationMinutes: 60,
-          priceYen: 5000,
-          via: "web"
-        },
-        {
-          id: "r2",
-          dateYmd: today,
-          time: "13:00",
-          name: "電話予約",
-          phoneLast4: "0000",
-          menu: "—",
-          durationMinutes: 90,
-          priceYen: 0,
-          via: "phone"
-        },
-        {
-          id: "r3",
-          dateYmd: today,
-          time: "14:00",
-          name: "佐藤様",
-          phoneLast4: "5678",
-          menu: "フットネイル",
-          durationMinutes: 60,
-          priceYen: 7000,
-          via: "web"
-        }
-      ]
-    };
-  });
+  // Load reserved dates for calendar
+  useEffect(() => {
+    let cancelled = false;
 
-  const reservations = useMemo(() => reservationsByDate[ymd] ?? [], [reservationsByDate, ymd]);
+    async function loadReservedDates() {
+      try {
+        const dates = await getReservedDates(
+          currentDate.getFullYear(),
+          currentDate.getMonth()
+        );
+        if (!cancelled) {
+          setReservedDateYmds(dates);
+        }
+      } catch (err) {
+        console.error("Failed to load reserved dates:", err);
+      }
+    }
+
+    loadReservedDates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentDate]);
 
   const [detail, setDetail] = useState<AdminReservation | null>(null);
   const [create, setCreate] = useState<{ time: string } | null>(null);
   const [edit, setEdit] = useState<AdminReservation | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+
+  const handleArrive = async (r: AdminReservation) => {
+    try {
+      await markReservationArrived(r.id);
+      // Reload reservations to reflect the change
+      const data = await getAdminReservationsByDate(currentDate);
+      setReservations(data);
+      setFlash("来店を確認しました。予約キャンセル・変更回数をリセットしました");
+    } catch (err) {
+      setFlash(`エラー: ${err instanceof Error ? err.message : "来店確認に失敗しました"}`);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -105,17 +135,7 @@ export default function AdminPage() {
         </div>
       ) : null}
 
-      <AdminHeader
-        shopName={SHOP_NAME}
-        date={currentDate}
-        onPrev={() =>
-          setCurrentDate((d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1))
-        }
-        onToday={() => setCurrentDate(new Date())}
-        onNext={() =>
-          setCurrentDate((d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1))
-        }
-      />
+      <AdminHeader shopName={SHOP_NAME} />
 
       <Card>
         <AdminNav />
@@ -132,12 +152,19 @@ export default function AdminPage() {
         </Card>
 
         <Card title="予約状況一覧" right={ymd}>
-          <DayCalendar
-            date={currentDate}
-            reservations={reservations}
-            onClickReserved={(r) => setDetail(r)}
-            onClickAvailable={(time) => setCreate({ time })}
-          />
+          {loading ? (
+            <div className="py-8 text-center text-sm text-slate-500">読み込み中...</div>
+          ) : error ? (
+            <div className="py-8 text-center text-sm text-red-600">{error}</div>
+          ) : (
+            <DayCalendar
+              date={currentDate}
+              reservations={reservations}
+              onClickReserved={(r) => setDetail(r)}
+              onClickAvailable={(time) => setCreate({ time })}
+              onArrive={handleArrive}
+            />
+          )}
         </Card>
       </div>
 
@@ -149,18 +176,25 @@ export default function AdminPage() {
             setEdit(detail);
             setDetail(null);
           }}
-          onCancel={() => {
-            setReservationsByDate((prev) => ({
-              ...prev,
-              [detail.dateYmd]: (prev[detail.dateYmd] ?? []).filter((x) => x.id !== detail.id)
-            }));
-            setFlash("キャンセルしました（SMS送信：仮）");
-            setDetail(null);
+          onCancel={async () => {
+            try {
+              await cancelReservation(detail.id);
+              // Reload reservations
+              const data = await getAdminReservationsByDate(currentDate);
+              setReservations(data);
+              setFlash("キャンセルしました（LINEメッセージ送信：仮 / キャンセル回数+1：仮）");
+              setDetail(null);
+            } catch (err) {
+              setFlash(`エラー: ${err instanceof Error ? err.message : "キャンセルに失敗しました"}`);
+            }
           }}
-          onResendSms={() => {
-            // eslint-disable-next-line no-console
-            console.log("SMS再送（仮）", detail);
-            setFlash("SMSを再送しました（仮）");
+          onResendSms={async () => {
+            try {
+              await resendSms(detail.id);
+              setFlash("LINEメッセージを再送しました");
+            } catch (err) {
+              setFlash(`エラー: ${err instanceof Error ? err.message : "LINEメッセージの再送に失敗しました"}`);
+            }
           }}
         />
       ) : null}
@@ -171,15 +205,17 @@ export default function AdminPage() {
           dateYmd={ymd}
           initialTime={create.time}
           onClose={() => setCreate(null)}
-          onSubmit={(r) => {
-            setReservationsByDate((prev) => ({
-              ...prev,
-              [ymd]: [...(prev[ymd] ?? []).filter((x) => x.id !== r.id), r].sort((a, b) =>
-                a.time.localeCompare(b.time)
-              )
-            }));
-            setFlash("予約を保存しました（SMS送信：仮）");
-            setCreate(null);
+          onSubmit={async (r, treatmentId, lineUserId) => {
+            try {
+              await createReservationFromAdmin(r, treatmentId, lineUserId);
+              // Reload reservations
+              const data = await getAdminReservationsByDate(currentDate);
+              setReservations(data);
+              setFlash("予約を保存しました（LINEメッセージ送信：仮）");
+              setCreate(null);
+            } catch (err) {
+              setFlash(`エラー: ${err instanceof Error ? err.message : "予約の作成に失敗しました"}`);
+            }
           }}
         />
       ) : null}
@@ -191,15 +227,18 @@ export default function AdminPage() {
           initialTime={edit.time}
           initialReservation={edit}
           onClose={() => setEdit(null)}
-          onSubmit={(r) => {
-            setReservationsByDate((prev) => ({
-              ...prev,
-              [edit.dateYmd]: [...(prev[edit.dateYmd] ?? []).filter((x) => x.id !== r.id), r].sort((a, b) =>
-                a.time.localeCompare(b.time)
-              )
-            }));
-            setFlash("変更を保存しました（SMS送信：仮）");
-            setEdit(null);
+          onSubmit={async (r, treatmentId, lineUserId) => {
+            try {
+              // 変更は「旧予約を論理削除→新規作成」の扱い（キャンセル回数は増やさない）
+              await changeReservation(edit.id, r, treatmentId, lineUserId || edit.lineUserId || "");
+              // Reload reservations
+              const data = await getAdminReservationsByDate(currentDate);
+              setReservations(data);
+              setFlash("変更を保存しました（LINEメッセージ送信：仮 / 変更回数+1：仮 / キャンセル回数は増えません）");
+              setEdit(null);
+            } catch (err) {
+              setFlash(`エラー: ${err instanceof Error ? err.message : "予約の変更に失敗しました"}`);
+            }
           }}
         />
       ) : null}

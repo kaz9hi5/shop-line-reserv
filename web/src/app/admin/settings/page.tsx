@@ -1,9 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { AdminNav } from "@/components/admin/AdminNav";
 import { Card } from "@/components/ui/Card";
+import {
+  getAppSettings,
+  updateAppSettings,
+  getBusinessDaysForWeek,
+  upsertBusinessDay,
+  deleteBusinessDay,
+  getBusinessHoursOverrides,
+  upsertBusinessHoursOverride,
+  deleteBusinessHoursOverride
+} from "@/lib/settings";
 
 const SHOP_NAME = "〇〇ネイルサロン";
 
@@ -47,6 +57,9 @@ function formatLabel(date: Date) {
 
 export default function AdminSettingsPage() {
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
 
   const [openTime, setOpenTime] = useState("10:00");
   const [closeTime, setCloseTime] = useState("19:00");
@@ -58,46 +71,161 @@ export default function AdminSettingsPage() {
   const weekStart = useMemo(() => startOfWeekMonday(currentDate), [currentDate]);
   const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
 
-  const [weekStatus, setWeekStatus] = useState<Record<string, DayStatus>>(() => {
-    // ダミー初期値：土日だけ決定、その他は未設定（要件の例に合わせる）
-    const map: Record<string, DayStatus> = {};
-    for (const d of week) map[formatYmd(d)] = "unset";
-    map[formatYmd(addDays(weekStart, 5))] = "open"; // Sat
-    map[formatYmd(addDays(weekStart, 6))] = "open"; // Sun
-    return map;
-  });
+  const [weekStatus, setWeekStatus] = useState<Record<string, DayStatus>>({});
+  const [weekHours, setWeekHours] = useState<Record<string, DayHoursOverride>>({});
 
-  const [weekHours, setWeekHours] = useState<Record<string, DayHoursOverride>>(() => {
-    const map: Record<string, DayHoursOverride> = {};
-    for (const d of week) map[formatYmd(d)] = { enabled: false };
-    // 例：週の火曜だけ短縮営業（デザイン確認用のダミー）
-    map[formatYmd(addDays(weekStart, 1))] = {
-      enabled: true,
-      openTime: "11:00",
-      closeTime: "18:00",
-      lunchOverrideEnabled: false
+  // Load settings
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSettings() {
+      try {
+        setLoading(true);
+
+        // Load app settings
+        const settings = await getAppSettings();
+        if (!cancelled) {
+          setOpenTime(settings.default_open_time);
+          setCloseTime(settings.default_close_time);
+          setDeadlineHours(settings.reservation_deadline_hours);
+          setLunchEnabled(settings.default_lunch_enabled);
+          setLunchStart(settings.default_lunch_start || "12:00");
+          setLunchEnd(settings.default_lunch_end || "13:00");
+        }
+
+        // Load business days for week
+        const businessDays = await getBusinessDaysForWeek(weekStart);
+        if (!cancelled) {
+          const statusMap: Record<string, DayStatus> = {};
+          for (const d of week) {
+            const ymd = formatYmd(d);
+            const dayData = businessDays.find((bd) => bd.day === ymd);
+            statusMap[ymd] = dayData ? (dayData.status as DayStatus) : "unset";
+          }
+          setWeekStatus(statusMap);
+        }
+
+        // Load business hours overrides for week
+        const weekEnd = addDays(weekStart, 6);
+        const overrides = await getBusinessHoursOverrides(weekStart, weekEnd);
+        if (!cancelled) {
+          const hoursMap: Record<string, DayHoursOverride> = {};
+          for (const d of week) {
+            const ymd = formatYmd(d);
+            const override = overrides.find((o) => o.day === ymd);
+            if (override) {
+              hoursMap[ymd] = {
+                enabled: true,
+                openTime: override.open_time,
+                closeTime: override.close_time,
+                lunchOverrideEnabled: override.lunch_enabled,
+                lunchStart: override.lunch_start || undefined,
+                lunchEnd: override.lunch_end || undefined
+              };
+            } else {
+              hoursMap[ymd] = { enabled: false };
+            }
+          }
+          setWeekHours(hoursMap);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setFlash(`エラー: ${err instanceof Error ? err.message : "設定の読み込みに失敗しました"}`);
+          console.error("Failed to load settings:", err);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadSettings();
+
+    return () => {
+      cancelled = true;
     };
-    return map;
-  });
+  }, [weekStart, week]);
 
   const unsetCount = useMemo(
     () => week.filter((d) => (weekStatus[formatYmd(d)] ?? "unset") === "unset").length,
     [week, weekStatus]
   );
 
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      setFlash(null);
+
+      // Save app settings
+      await updateAppSettings({
+        default_open_time: openTime,
+        default_close_time: closeTime,
+        reservation_deadline_hours: deadlineHours,
+        default_lunch_enabled: lunchEnabled,
+        default_lunch_start: lunchEnabled ? lunchStart : null,
+        default_lunch_end: lunchEnabled ? lunchEnd : null
+      });
+
+      // Save business days
+      for (const d of week) {
+        const ymd = formatYmd(d);
+        const status = weekStatus[ymd] || "unset";
+        if (status === "unset") {
+          await deleteBusinessDay(ymd);
+        } else {
+          await upsertBusinessDay(ymd, status);
+        }
+      }
+
+      // Save business hours overrides
+      for (const d of week) {
+        const ymd = formatYmd(d);
+        const hours = weekHours[ymd];
+        if (!hours || !hours.enabled) {
+          await deleteBusinessHoursOverride(ymd);
+        } else {
+          await upsertBusinessHoursOverride({
+            day: ymd,
+            open_time: hours.openTime,
+            close_time: hours.closeTime,
+            lunch_enabled: hours.lunchOverrideEnabled,
+            lunch_start: hours.lunchOverrideEnabled ? hours.lunchStart || null : null,
+            lunch_end: hours.lunchOverrideEnabled ? hours.lunchEnd || null : null
+          });
+        }
+      }
+
+      setFlash("設定を保存しました");
+    } catch (err) {
+      setFlash(`エラー: ${err instanceof Error ? err.message : "設定の保存に失敗しました"}`);
+      console.error("Failed to save settings:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <AdminHeader
-        shopName={SHOP_NAME}
-        date={currentDate}
-        onPrev={() =>
-          setCurrentDate((d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1))
-        }
-        onToday={() => setCurrentDate(new Date())}
-        onNext={() =>
-          setCurrentDate((d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1))
-        }
-      />
+      {flash ? (
+        <div className="sticky top-3 z-40">
+          <div className="mx-auto max-w-5xl px-4">
+            <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-lg ring-1 ring-black/10">
+              <div className="min-w-0 truncate">{flash}</div>
+              <button
+                type="button"
+                onClick={() => setFlash(null)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/80 hover:bg-white/10"
+                aria-label="閉じる"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <AdminHeader shopName={SHOP_NAME} />
 
       <Card>
         <AdminNav />
@@ -388,17 +516,18 @@ export default function AdminSettingsPage() {
           </div>
 
           <div className="mt-4 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={() => {
-                // ダミー：保存処理は後でSupabaseに接続
-                // eslint-disable-next-line no-console
-                console.log({ openTime, closeTime, lunchEnabled, lunchStart, lunchEnd, weekStatus, weekHours });
-              }}
-            >
-              保存（仮）
-            </button>
+            {loading ? (
+              <div className="text-sm text-slate-500">読み込み中...</div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? "保存中..." : "保存"}
+              </button>
+            )}
           </div>
         </Card>
       </div>
