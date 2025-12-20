@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 241 245 249; /* slate-100 (少し濃く) */
+  --card: 255 255 255;
+  --text: 15 23 42; /* slate-900 */
+  --muted: 71 85 105; /* slate-600 */
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: rgb(var(--bg));
+  color: rgb(var(--text));
+  text-rendering: geometricPrecision;
+  letter-spacing: 0.01em;
+}
+
+
