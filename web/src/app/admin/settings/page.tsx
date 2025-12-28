@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { AdminNav } from "@/components/admin/AdminNav";
 import { Card } from "@/components/ui/Card";
+import { BusyOverlay } from "@/components/ui/BusyOverlay";
 import {
   getAppSettings,
   updateAppSettings,
-  getBusinessDaysForWeek,
+  getBusinessDays,
   upsertBusinessDay,
   deleteBusinessDay,
   getBusinessHoursOverrides,
@@ -41,6 +42,23 @@ function addDays(d: Date, n: number) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 }
 
+function endOfWeekSunday(d: Date) {
+  const start = startOfWeekMonday(d);
+  return addDays(start, 6);
+}
+
+function addMonths(d: Date, n: number) {
+  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+}
+
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
 function formatYmd(date: Date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -53,6 +71,11 @@ function formatLabel(date: Date) {
   const m = date.getMonth() + 1;
   const d = date.getDate();
   return `${m}/${d}（${weekday}）`;
+}
+
+function formatTime(time: string): string {
+  // HH:mm:ss または HH:mm 形式を HH:mm に変換
+  return time.substring(0, 5);
 }
 
 export default function AdminSettingsPage() {
@@ -68,11 +91,23 @@ export default function AdminSettingsPage() {
   const [lunchStart, setLunchStart] = useState<string>("12:00");
   const [lunchEnd, setLunchEnd] = useState<string>("13:00");
 
-  const weekStart = useMemo(() => startOfWeekMonday(currentDate), [currentDate]);
-  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+  const monthStart = useMemo(() => startOfMonth(currentDate), [currentDate]);
+  const monthEnd = useMemo(() => endOfMonth(currentDate), [currentDate]);
+  const monthDays = useMemo(() => Array.from({ length: monthEnd.getDate() }, (_, i) => addDays(monthStart, i)), [monthStart, monthEnd]);
 
-  const [weekStatus, setWeekStatus] = useState<Record<string, DayStatus>>({});
-  const [weekHours, setWeekHours] = useState<Record<string, DayHoursOverride>>({});
+  const calendarStart = useMemo(() => startOfWeekMonday(monthStart), [monthStart]);
+  const calendarEnd = useMemo(() => endOfWeekSunday(monthEnd), [monthEnd]);
+  const calendarDays = useMemo(() => {
+    const days: Date[] = [];
+    for (let d = new Date(calendarStart); d <= calendarEnd; d = addDays(d, 1)) {
+      days.push(d);
+    }
+    return days;
+  }, [calendarStart, calendarEnd]);
+
+  const [dayStatus, setDayStatus] = useState<Record<string, DayStatus>>({});
+  const [dayHours, setDayHours] = useState<Record<string, DayHoursOverride>>({});
+  const [selectedYmd, setSelectedYmd] = useState<string>(() => formatYmd(new Date()));
 
   // Load settings
   useEffect(() => {
@@ -93,24 +128,23 @@ export default function AdminSettingsPage() {
           setLunchEnd(settings.default_lunch_end || "13:00");
         }
 
-        // Load business days for week
-        const businessDays = await getBusinessDaysForWeek(weekStart);
+        // Load business days for month
+        const businessDays = await getBusinessDays(monthStart, monthEnd);
         if (!cancelled) {
           const statusMap: Record<string, DayStatus> = {};
-          for (const d of week) {
+          for (const d of monthDays) {
             const ymd = formatYmd(d);
             const dayData = businessDays.find((bd) => bd.day === ymd);
             statusMap[ymd] = dayData ? (dayData.status as DayStatus) : "unset";
           }
-          setWeekStatus(statusMap);
+          setDayStatus(statusMap);
         }
 
-        // Load business hours overrides for week
-        const weekEnd = addDays(weekStart, 6);
-        const overrides = await getBusinessHoursOverrides(weekStart, weekEnd);
+        // Load business hours overrides for month
+        const overrides = await getBusinessHoursOverrides(monthStart, monthEnd);
         if (!cancelled) {
           const hoursMap: Record<string, DayHoursOverride> = {};
-          for (const d of week) {
+          for (const d of monthDays) {
             const ymd = formatYmd(d);
             const override = overrides.find((o) => o.day === ymd);
             if (override) {
@@ -126,7 +160,7 @@ export default function AdminSettingsPage() {
               hoursMap[ymd] = { enabled: false };
             }
           }
-          setWeekHours(hoursMap);
+          setDayHours(hoursMap);
         }
       } catch (err) {
         if (!cancelled) {
@@ -145,11 +179,11 @@ export default function AdminSettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [weekStart, week]);
+  }, [monthStart, monthEnd, monthDays]);
 
   const unsetCount = useMemo(
-    () => week.filter((d) => (weekStatus[formatYmd(d)] ?? "unset") === "unset").length,
-    [week, weekStatus]
+    () => monthDays.filter((d) => (dayStatus[formatYmd(d)] ?? "unset") === "unset").length,
+    [monthDays, dayStatus]
   );
 
   const handleSave = async () => {
@@ -168,9 +202,9 @@ export default function AdminSettingsPage() {
       });
 
       // Save business days
-      for (const d of week) {
+      for (const d of monthDays) {
         const ymd = formatYmd(d);
-        const status = weekStatus[ymd] || "unset";
+        const status = dayStatus[ymd] || "unset";
         if (status === "unset") {
           await deleteBusinessDay(ymd);
         } else {
@@ -179,9 +213,9 @@ export default function AdminSettingsPage() {
       }
 
       // Save business hours overrides
-      for (const d of week) {
+      for (const d of monthDays) {
         const ymd = formatYmd(d);
-        const hours = weekHours[ymd];
+        const hours = dayHours[ymd];
         if (!hours || !hours.enabled) {
           await deleteBusinessHoursOverride(ymd);
         } else {
@@ -205,8 +239,20 @@ export default function AdminSettingsPage() {
     }
   };
 
+  // Auto-dismiss flash after 5000ms
+  useEffect(() => {
+    if (!flash) return;
+    const t = window.setTimeout(() => setFlash(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [flash]);
+
+  const dismissFlash = () => {
+    setFlash(null);
+  };
+
   return (
     <div className="space-y-4">
+      <BusyOverlay active={saving} label="保存中..." />
       {flash ? (
         <div className="sticky top-3 z-40">
           <div className="mx-auto max-w-5xl px-4">
@@ -214,7 +260,7 @@ export default function AdminSettingsPage() {
               <div className="min-w-0 truncate">{flash}</div>
               <button
                 type="button"
-                onClick={() => setFlash(null)}
+                onClick={dismissFlash}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/80 hover:bg-white/10"
                 aria-label="閉じる"
               >
@@ -320,199 +366,259 @@ export default function AdminSettingsPage() {
           </Card>
         </div>
 
-        <Card title="営業日（週：月曜から日曜）" right={`${formatYmd(weekStart)}〜`}>
+        <Card
+          title="営業日（1ヶ月カレンダー）"
+          right={
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentDate((d) => addMonths(d, -1))}
+                className="inline-flex h-8 items-center justify-center rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                ←
+              </button>
+              <span className="text-xs text-slate-600">
+                {currentDate.getFullYear()}/{String(currentDate.getMonth() + 1).padStart(2, "0")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentDate((d) => addMonths(d, 1))}
+                className="inline-flex h-8 items-center justify-center rounded-xl border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+              >
+                →
+              </button>
+            </div>
+          }
+        >
           <p className="text-sm leading-6 text-slate-600">
-            営業日設定は <span className="font-semibold">日付単位</span>で行います。予約画面は
-            「月曜〜日曜の一週間のうち、状態が設定された日付」だけ表示します。
+            営業日設定は <span className="font-semibold">日付単位</span>で行います。未設定の日付は予約画面に表示されません。
           </p>
 
           {unsetCount > 0 ? (
             <div className="mt-4 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200/70">
               <p className="text-xs leading-5 text-amber-900">
-                この週に未設定の日付が {unsetCount} 件あります（予約画面には表示されません）。
+                この月に未設定の日付が {unsetCount} 件あります（予約画面には表示されません）。
               </p>
             </div>
           ) : null}
 
-          <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-slate-200/70">
-            <div className="grid grid-cols-[1fr_140px_320px] bg-slate-100/70 px-3 py-2 text-xs font-semibold text-slate-600">
-              <div>日付</div>
-              <div>状態</div>
-              <div>営業時間（個別）</div>
-            </div>
-            <ul className="divide-y divide-slate-200/70 bg-white">
-              {week.map((d) => {
-                const key = formatYmd(d);
-                const value = weekStatus[key] ?? "unset";
-                const hours: DayHoursOverride = weekHours[key] ?? { enabled: false };
-                const showHoursControls = value !== "unset";
-                return (
-                  <li
-                    key={key}
-                    className="grid grid-cols-[1fr_140px_320px] items-center gap-3 px-3 py-3"
-                  >
-                    <div className="text-sm font-medium text-slate-700">{formatLabel(d)}</div>
-                    <select
-                      value={value}
-                      onChange={(e) =>
-                        setWeekStatus((prev) => ({ ...prev, [key]: e.target.value as DayStatus }))
-                      }
-                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+          <div className="mt-4 grid gap-3">
+            <div className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200/70">
+              <div className="grid grid-cols-7 bg-slate-100/70 px-3 py-2 text-center text-xs font-semibold text-slate-600">
+                {["月", "火", "水", "木", "金", "土", "日"].map((w) => (
+                  <div key={w}>{w}</div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 gap-px bg-slate-200/70">
+                {calendarDays.map((d) => {
+                  const ymd = formatYmd(d);
+                  const inMonth = d.getMonth() === currentDate.getMonth();
+                  const status = dayStatus[ymd] ?? "unset";
+                  const active = ymd === selectedYmd;
+                  const color =
+                    status === "open"
+                      ? "bg-emerald-50"
+                      : status === "holiday" || status === "closed"
+                        ? "bg-slate-50"
+                        : "bg-white";
+                  return (
+                    <button
+                      key={ymd}
+                      type="button"
+                      onClick={() => setSelectedYmd(ymd)}
+                      className={[
+                        "min-h-12 px-2 py-2 text-left text-xs",
+                        color,
+                        inMonth ? "text-slate-800" : "text-slate-400",
+                        active ? "ring-2 ring-slate-900/30" : "ring-0",
+                        "hover:bg-slate-50 focus:outline-none"
+                      ].join(" ")}
                     >
-                      <option value="unset">未設定（非表示）</option>
-                      <option value="open">営業日（予約可）</option>
-                      <option value="holiday">休日（表示/予約不可）</option>
-                      <option value="closed">定休日（表示/予約不可）</option>
-                    </select>
+                      <div className="flex items-center justify-between">
+                        <div className="font-semibold">{d.getDate()}</div>
+                        {status !== "unset" ? (
+                          <div
+                            className={[
+                              "h-2 w-2 rounded-full",
+                              status === "open"
+                                ? "bg-emerald-500"
+                                : status === "holiday"
+                                  ? "bg-slate-400"
+                                  : "bg-slate-500"
+                            ].join(" ")}
+                          />
+                        ) : null}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
-                    <div className="min-w-0">
-                      {showHoursControls ? (
-                        <div className="flex items-start justify-between gap-3">
-                          <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+            <div className="rounded-2xl bg-white p-3 ring-1 ring-slate-200/70">
+              <div className="text-sm font-semibold text-slate-800">選択日：{selectedYmd}</div>
+              <div className="mt-3">
+                <div className="mb-1 text-xs font-semibold text-slate-600">状態</div>
+                <select
+                  value={dayStatus[selectedYmd] ?? "unset"}
+                  onChange={(e) =>
+                    setDayStatus((prev) => ({ ...prev, [selectedYmd]: e.target.value as DayStatus }))
+                  }
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                >
+                  <option value="unset">未設定（非表示）</option>
+                  <option value="open">営業日（予約可）</option>
+                  <option value="holiday">休日（表示/予約不可）</option>
+                  <option value="closed">定休日（表示/予約不可）</option>
+                </select>
+              </div>
+
+              {(dayStatus[selectedYmd] ?? "unset") === "open" ? (
+                <div className="mt-3">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={(dayHours[selectedYmd] as any)?.enabled === true}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        setDayHours((prev: Record<string, DayHoursOverride>) => ({
+                          ...prev,
+                          [selectedYmd]: enabled
+                            ? { enabled: true, openTime, closeTime, lunchOverrideEnabled: false }
+                            : { enabled: false }
+                        }));
+                      }}
+                      className="h-4 w-4 rounded border-slate-300 text-slate-900"
+                    />
+                    個別営業時間を設定
+                  </label>
+
+                  {(dayHours[selectedYmd] as any)?.enabled ? (
+                    <div className="mt-2 flex flex-col gap-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={(dayHours[selectedYmd] as any).openTime}
+                          onChange={(e) =>
+                            setDayHours((prev: Record<string, DayHoursOverride>) => ({
+                              ...prev,
+                              [selectedYmd]: {
+                                ...(dayHours[selectedYmd] as any),
+                                enabled: true,
+                                openTime: e.target.value
+                              }
+                            }))
+                          }
+                          className="h-9 w-[120px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                        />
+                        <span className="text-xs text-slate-500">–</span>
+                        <input
+                          type="time"
+                          value={(dayHours[selectedYmd] as any).closeTime}
+                          onChange={(e) =>
+                            setDayHours((prev: Record<string, DayHoursOverride>) => ({
+                              ...prev,
+                              [selectedYmd]: {
+                                ...(dayHours[selectedYmd] as any),
+                                enabled: true,
+                                closeTime: e.target.value
+                              }
+                            }))
+                          }
+                          className="h-9 w-[120px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                        />
+                      </div>
+
+                      <div className="rounded-xl bg-slate-50 px-2 py-2 ring-1 ring-slate-200/70">
+                        <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={(dayHours[selectedYmd] as any).lunchOverrideEnabled}
+                            onChange={(e) => {
+                              const enabled = e.target.checked;
+                              const cur = (dayHours[selectedYmd] as any) ?? {};
+                              setDayHours((prev: Record<string, DayHoursOverride>) => ({
+                                ...prev,
+                                [selectedYmd]: enabled
+                                  ? {
+                                      ...cur,
+                                      enabled: true,
+                                      lunchOverrideEnabled: true,
+                                      lunchStart: lunchStart,
+                                      lunchEnd: lunchEnd
+                                    }
+                                  : {
+                                      ...cur,
+                                      enabled: true,
+                                      lunchOverrideEnabled: false,
+                                      lunchStart: undefined,
+                                      lunchEnd: undefined
+                                    }
+                              }));
+                            }}
+                            className="h-4 w-4 rounded border-slate-300 text-slate-900"
+                          />
+                          昼休憩（個別）
+                        </label>
+
+                        {(dayHours[selectedYmd] as any).lunchOverrideEnabled ? (
+                          <div className="mt-2 flex items-center gap-2">
                             <input
-                              type="checkbox"
-                              checked={hours.enabled}
-                              onChange={(e) => {
-                                const enabled = e.target.checked;
-                                setWeekHours((prev: Record<string, DayHoursOverride>) => ({
+                              type="time"
+                              value={(dayHours[selectedYmd] as any).lunchStart ?? lunchStart}
+                              onChange={(e) =>
+                                setDayHours((prev: Record<string, DayHoursOverride>) => ({
                                   ...prev,
-                                  [key]: enabled
-                                    ? { enabled: true, openTime, closeTime, lunchOverrideEnabled: false }
-                                    : { enabled: false }
-                                }));
-                              }}
-                              className="h-4 w-4 rounded border-slate-300 text-slate-900"
+                                  [selectedYmd]: {
+                                    ...(dayHours[selectedYmd] as any),
+                                    enabled: true,
+                                    lunchOverrideEnabled: true,
+                                    lunchStart: e.target.value,
+                                    lunchEnd: (dayHours[selectedYmd] as any).lunchEnd ?? lunchEnd
+                                  }
+                                }))
+                              }
+                              className="h-8 w-[110px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
                             />
-                            個別
-                          </label>
-
-                          {hours.enabled ? (
-                            <div className="flex min-w-0 flex-col gap-2">
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="time"
-                                  value={hours.openTime}
-                                  onChange={(e) =>
-                                    setWeekHours((prev: Record<string, DayHoursOverride>) => ({
-                                      ...prev,
-                                      [key]: {
-                                        ...hours,
-                                        enabled: true,
-                                        openTime: e.target.value
-                                      }
-                                    }))
+                            <span className="text-xs text-slate-500">–</span>
+                            <input
+                              type="time"
+                              value={(dayHours[selectedYmd] as any).lunchEnd ?? lunchEnd}
+                              onChange={(e) =>
+                                setDayHours((prev: Record<string, DayHoursOverride>) => ({
+                                  ...prev,
+                                  [selectedYmd]: {
+                                    ...(dayHours[selectedYmd] as any),
+                                    enabled: true,
+                                    lunchOverrideEnabled: true,
+                                    lunchStart: (dayHours[selectedYmd] as any).lunchStart ?? lunchStart,
+                                    lunchEnd: e.target.value
                                   }
-                                  className="h-9 w-[100px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                                />
-                                <span className="text-xs text-slate-500">–</span>
-                                <input
-                                  type="time"
-                                  value={hours.closeTime}
-                                  onChange={(e) =>
-                                    setWeekHours((prev: Record<string, DayHoursOverride>) => ({
-                                      ...prev,
-                                      [key]: {
-                                        ...hours,
-                                        enabled: true,
-                                        closeTime: e.target.value
-                                      }
-                                    }))
-                                  }
-                                  className="h-9 w-[100px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                                />
-                              </div>
-
-                              <div className="flex min-w-0 items-center justify-between gap-2 rounded-xl bg-slate-50 px-2 py-2 ring-1 ring-slate-200/70">
-                                <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                                  <input
-                                    type="checkbox"
-                                    checked={hours.lunchOverrideEnabled}
-                                    onChange={(e) => {
-                                      const enabled = e.target.checked;
-                                      setWeekHours((prev: Record<string, DayHoursOverride>) => ({
-                                        ...prev,
-                                        [key]: enabled
-                                          ? {
-                                              ...hours,
-                                              enabled: true,
-                                              lunchOverrideEnabled: true,
-                                              lunchStart: lunchStart,
-                                              lunchEnd: lunchEnd
-                                            }
-                                          : {
-                                              ...hours,
-                                              enabled: true,
-                                              lunchOverrideEnabled: false,
-                                              lunchStart: undefined,
-                                              lunchEnd: undefined
-                                            }
-                                      }));
-                                    }}
-                                    className="h-4 w-4 rounded border-slate-300 text-slate-900"
-                                  />
-                                  昼休憩（個別）
-                                </label>
-
-                                {hours.lunchOverrideEnabled ? (
-                                  <div className="flex items-center gap-2">
-                                    <input
-                                      type="time"
-                                      value={hours.lunchStart ?? lunchStart}
-                                      onChange={(e) =>
-                                        setWeekHours((prev: Record<string, DayHoursOverride>) => ({
-                                          ...prev,
-                                          [key]: {
-                                            ...hours,
-                                            enabled: true,
-                                            lunchOverrideEnabled: true,
-                                            lunchStart: e.target.value,
-                                            lunchEnd: hours.lunchEnd ?? lunchEnd
-                                          }
-                                        }))
-                                      }
-                                      className="h-8 w-[95px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                                    />
-                                    <span className="text-xs text-slate-500">–</span>
-                                    <input
-                                      type="time"
-                                      value={hours.lunchEnd ?? lunchEnd}
-                                      onChange={(e) =>
-                                        setWeekHours((prev: Record<string, DayHoursOverride>) => ({
-                                          ...prev,
-                                          [key]: {
-                                            ...hours,
-                                            enabled: true,
-                                            lunchOverrideEnabled: true,
-                                            lunchStart: hours.lunchStart ?? lunchStart,
-                                            lunchEnd: e.target.value
-                                          }
-                                        }))
-                                      }
-                                      className="h-8 w-[95px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                                    />
-                                  </div>
-                                ) : (
-                                  <div className="text-xs text-slate-500">
-                                    デフォルト：
-                                    {lunchEnabled ? `${lunchStart}–${lunchEnd}` : "なし"}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="text-xs text-slate-500">
-                              デフォルト：{openTime}–{closeTime}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="text-xs text-slate-400">未設定は非表示</div>
-                      )}
+                                }))
+                              }
+                              className="h-8 w-[110px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                            />
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-xs text-slate-500">
+                            デフォルト：
+                            {lunchEnabled ? `${formatTime(lunchStart)}–${formatTime(lunchEnd)}` : "なし"}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </li>
-                );
-              })}
-            </ul>
+                  ) : (
+                    <div className="mt-2 text-xs text-slate-500">
+                      デフォルト：{formatTime(openTime)}–{formatTime(closeTime)}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-3 text-xs text-slate-400">
+                  未設定/営業日以外では営業時間の個別設定は表示しません
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="mt-4 flex items-center justify-end gap-2">

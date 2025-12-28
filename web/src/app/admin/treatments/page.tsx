@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { AdminNav } from "@/components/admin/AdminNav";
 import { Card } from "@/components/ui/Card";
+import { BusyOverlay } from "@/components/ui/BusyOverlay";
 import { TreatmentModal } from "@/components/admin/TreatmentModal";
 import { getTreatments, createTreatment, updateTreatment, deleteTreatment } from "@/lib/treatments";
 import type { Database } from "@/lib/database.types";
@@ -27,6 +28,7 @@ export default function AdminTreatmentsPage() {
   const [editingTreatment, setEditingTreatment] = useState<Treatment | null>(null);
   const [creatingTreatment, setCreatingTreatment] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Load treatments
   useEffect(() => {
@@ -46,8 +48,20 @@ export default function AdminTreatmentsPage() {
     loadTreatments();
   }, []);
 
+  // Auto-dismiss flash after 5000ms
+  useEffect(() => {
+    if (!flash) return;
+    const t = window.setTimeout(() => setFlash(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [flash]);
+
+  const dismissFlash = () => {
+    setFlash(null);
+  };
+
   const handleCreate = async (treatment: { name: string; description: string; durationMinutes: number; priceYen: number }) => {
     try {
+      setSaving(true);
       await createTreatment({
         name: treatment.name,
         description: treatment.description,
@@ -61,12 +75,15 @@ export default function AdminTreatmentsPage() {
       setFlash("施術メニューを追加しました");
     } catch (err) {
       setFlash(`エラー: ${err instanceof Error ? err.message : "施術メニューの追加に失敗しました"}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleUpdate = async (treatment: { id?: string; name: string; description: string; durationMinutes: number; priceYen: number }) => {
     if (!treatment.id) return;
     try {
+      setSaving(true);
       await updateTreatment(treatment.id, {
         name: treatment.name,
         description: treatment.description,
@@ -80,12 +97,15 @@ export default function AdminTreatmentsPage() {
       setFlash("施術メニューを更新しました");
     } catch (err) {
       setFlash(`エラー: ${err instanceof Error ? err.message : "施術メニューの更新に失敗しました"}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm("この施術メニューを削除しますか？")) return;
     try {
+      setSaving(true);
       await deleteTreatment(id);
       // Reload treatments
       const data = await getTreatments();
@@ -93,11 +113,14 @@ export default function AdminTreatmentsPage() {
       setFlash("施術メニューを削除しました");
     } catch (err) {
       setFlash(`エラー: ${err instanceof Error ? err.message : "施術メニューの削除に失敗しました"}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
     <div className="space-y-4">
+      <BusyOverlay active={saving} label="保存中..." />
       {flash ? (
         <div className="sticky top-3 z-40">
           <div className="mx-auto max-w-5xl px-4">
@@ -105,7 +128,7 @@ export default function AdminTreatmentsPage() {
               <div className="min-w-0 truncate">{flash}</div>
               <button
                 type="button"
-                onClick={() => setFlash(null)}
+                onClick={dismissFlash}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/80 hover:bg-white/10"
                 aria-label="閉じる"
               >

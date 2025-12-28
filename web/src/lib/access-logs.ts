@@ -1,197 +1,83 @@
 import { supabase } from "./supabase";
 import type { Database } from "./database.types";
+import { callRpc, selectFromTable, insertIntoTable, deleteFromTable } from "./admin-db-proxy";
+import { generateDeviceFingerprint } from "./device-fingerprint";
 
-type AccessLog = Database["public"]["Tables"]["admin_access_logs"]["Row"];
-type AccessLogInsert = Database["public"]["Tables"]["admin_access_logs"]["Insert"];
 type AdminAllowedIp = Database["public"]["Tables"]["admin_allowed_ips"]["Row"];
-type AdminAllowedIpInsert = Database["public"]["Tables"]["admin_allowed_ips"]["Insert"];
 
 /**
- * Log admin access attempt
- */
-export async function logAdminAccess(
-  log: AccessLogInsert
-): Promise<AccessLog> {
-  const { data, error } = await (supabase
-    .from("admin_access_logs") as any)
-    .insert(log)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to log admin access: ${error.message}`);
-  }
-
-  return data;
-}
-
-/**
- * Get access logs with filters
- */
-export async function getAccessLogs(
-  options?: {
-    startDate?: Date;
-    endDate?: Date;
-    ip?: string;
-    result?: "allowed" | "denied";
-    limit?: number;
-  }
-): Promise<AccessLog[]> {
-  let query = supabase.from("admin_access_logs").select("*");
-
-  if (options?.startDate) {
-    query = query.gte("created_at", options.startDate.toISOString());
-  }
-  if (options?.endDate) {
-    query = query.lte("created_at", options.endDate.toISOString());
-  }
-  if (options?.ip) {
-    query = query.eq("ip", options.ip);
-  }
-  if (options?.result) {
-    query = query.eq("result", options.result);
-  }
-
-  query = query.order("created_at", { ascending: false });
-
-  if (options?.limit) {
-    query = query.limit(options.limit);
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    throw new Error(`Failed to fetch access logs: ${error.message}`);
-  }
-
-  return data || [];
-}
-
-/**
- * Get allowed IPs
+ * Get allowed IPs (via Edge Function)
  */
 export async function getAllowedIps(): Promise<AdminAllowedIp[]> {
-  const { data, error } = await supabase
-    .from("admin_allowed_ips")
-    .select("*")
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    throw new Error(`Failed to fetch allowed IPs: ${error.message}`);
+  try {
+    const data = await selectFromTable<AdminAllowedIp>("admin_allowed_ips", {
+      order: { column: "created_at", ascending: false }
+    });
+    return data || [];
+  } catch (error) {
+    throw new Error(`Failed to fetch allowed IPs: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data || [];
 }
 
 /**
- * Add allowed IP
+ * Add allowed IP (via Edge Function)
  */
-export async function addAllowedIp(ip: string): Promise<AdminAllowedIp> {
-  // Check if IP already exists (even if deleted)
-  const { data: existing } = await (supabase
-    .from("admin_allowed_ips") as any)
-    .select("*")
-    .eq("ip", ip)
-    .single();
+export async function addAllowedIp(ip: string, role: "manager" | "staff" = "manager", deviceFingerprint?: string): Promise<AdminAllowedIp> {
+  try {
+    // Check if IP already exists
+    const existing = await selectFromTable<AdminAllowedIp>("admin_allowed_ips", {
+      where: { ip },
+      limit: 1
+    });
 
-  if (existing) {
-    // If deleted, restore it
-    if ((existing as AdminAllowedIp).deleted_at) {
-      const { data, error } = await (supabase
-        .from("admin_allowed_ips") as any)
-        .update({ deleted_at: null })
-        .eq("ip", ip)
-        .select()
-        .single();
-
-      if (error) {
-        throw new Error(`Failed to restore allowed IP: ${error.message}`);
-      }
-
-      return data;
+    if (existing && existing.length > 0) {
+      // Already exists
+      return existing[0];
     }
-    // Already exists and active
-    return existing;
+
+    // Create new
+    const newRecord = await insertIntoTable<AdminAllowedIp>("admin_allowed_ips", {
+      ip,
+      role,
+      device_fingerprint: deviceFingerprint || null,
+    });
+
+    return newRecord;
+  } catch (error) {
+    throw new Error(`Failed to add allowed IP: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  // Create new
-  const { data, error } = await (supabase
-    .from("admin_allowed_ips") as any)
-    .insert({ ip })
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to add allowed IP: ${error.message}`);
-  }
-
-  return data;
 }
 
 /**
- * Remove allowed IP (logical delete)
+ * Remove allowed IP (physical delete via Edge Function)
  */
 export async function removeAllowedIp(ip: string): Promise<void> {
-  const { error } = await (supabase
-    .from("admin_allowed_ips") as any)
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("ip", ip);
-
-  if (error) {
-    throw new Error(`Failed to remove allowed IP: ${error.message}`);
+  try {
+    await deleteFromTable("admin_allowed_ips", { ip });
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : "Unknown error";
+    // ホワイトリストがnullになった場合（Unauthorizedエラー）は特別なエラーとして再スロー
+    if (errorMsg.includes("Unauthorized")) {
+      const unauthorizedError = new Error("Unauthorized");
+      (unauthorizedError as any).isUnauthorized = true;
+      throw unauthorizedError;
+    }
+    throw new Error(`Failed to remove allowed IP: ${errorMsg}`);
   }
 }
 
 /**
- * Check if IP is allowed
+ * Check if IP is allowed (via Edge Function)
  */
 export async function isIpAllowed(ip: string): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("admin_allowed_ips")
-    .select("*")
-    .eq("ip", ip)
-    .is("deleted_at", null)
-    .single();
-
-  if (error) {
-    if (error.code === "PGRST116") {
-      return false; // Not found = not allowed
-    }
-    throw new Error(`Failed to check IP: ${error.message}`);
-  }
-
-  return !!data;
-}
-
-/**
- * Get access log enabled setting
- */
-export async function isAccessLogEnabled(): Promise<boolean> {
-  const { data, error } = await (supabase
-    .from("app_settings") as any)
-    .select("admin_access_log_enabled")
-    .eq("id", true)
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to fetch access log setting: ${error.message}`);
-  }
-
-  return (data as any)?.admin_access_log_enabled ?? true;
-}
-
-/**
- * Set access log enabled setting
- */
-export async function setAccessLogEnabled(enabled: boolean): Promise<void> {
-  const { error } = await (supabase
-    .from("app_settings") as any)
-    .update({ admin_access_log_enabled: enabled })
-    .eq("id", true);
-
-  if (error) {
-    throw new Error(`Failed to update access log setting: ${error.message}`);
+  try {
+    const ok = await callRpc<boolean>("is_admin_ip_allowed", {
+      p_ip: ip,
+      p_device_fingerprint: generateDeviceFingerprint()
+    });
+    return ok === true;
+  } catch (error) {
+    // If error occurs, assume not allowed
+    return false;
   }
 }
-

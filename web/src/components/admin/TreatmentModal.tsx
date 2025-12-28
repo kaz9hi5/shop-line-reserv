@@ -62,6 +62,7 @@ export function TreatmentModal({
     <Modal
       title={mode === "create" ? "施術メニュー追加" : "施術メニュー編集"}
       onClose={onClose}
+      disableEscape={true}
       footer={
         <div className="flex items-center justify-end gap-2">
           <button

@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import type { Database } from "./database.types";
+import { selectFromTable, insertIntoTable, updateTable, deleteFromTable } from "./admin-db-proxy";
 
 type AppSettings = Database["public"]["Tables"]["app_settings"]["Row"];
 type AppSettingsUpdate = Database["public"]["Tables"]["app_settings"]["Update"];
@@ -11,68 +12,62 @@ type BusinessHoursOverrideInsert = Database["public"]["Tables"]["business_hours_
 type BusinessHoursOverrideUpdate = Database["public"]["Tables"]["business_hours_overrides"]["Update"];
 
 /**
- * Get app settings
+ * Get app settings (via Edge Function)
  */
 export async function getAppSettings(): Promise<AppSettings> {
-  const { data, error } = await (supabase
-    .from("app_settings") as any)
-    .select("*")
-    .eq("id", true)
-    .single();
+  try {
+    const data = await selectFromTable<AppSettings>("app_settings", {
+      where: { id: true },
+      limit: 1
+    });
+    
+    if (!data || data.length === 0) {
+      throw new Error("App settings not found");
+    }
 
-  if (error) {
-    throw new Error(`Failed to fetch app settings: ${error.message}`);
+    return data[0];
+  } catch (error) {
+    throw new Error(`Failed to fetch app settings: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  if (!data) {
-    throw new Error("App settings not found");
-  }
-
-  return data;
 }
 
 /**
- * Update app settings
+ * Update app settings (via Edge Function)
  */
 export async function updateAppSettings(
   updates: AppSettingsUpdate
 ): Promise<AppSettings> {
-  const { data, error } = await (supabase
-    .from("app_settings") as any)
-    .update(updates)
-    .eq("id", true)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to update app settings: ${error.message}`);
+  try {
+    const data = await updateTable<AppSettings>("app_settings", updates, { id: true });
+    return data[0];
+  } catch (error) {
+    throw new Error(`Failed to update app settings: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data;
 }
 
 /**
- * Get business days for a date range
+ * Get business days for a date range (via Edge Function)
  */
 export async function getBusinessDays(
   startDate: Date,
   endDate: Date
 ): Promise<BusinessDay[]> {
-  const start = startDate.toISOString().split("T")[0];
-  const end = endDate.toISOString().split("T")[0];
+  try {
+    const data = await selectFromTable<BusinessDay>("business_days", {
+      order: { column: "day", ascending: true }
+    });
 
-  const { data, error } = await (supabase
-    .from("business_days") as any)
-    .select("*")
-    .gte("day", start)
-    .lte("day", end)
-    .order("day", { ascending: true });
-
-  if (error) {
-    throw new Error(`Failed to fetch business days: ${error.message}`);
+    // Filter by date range (Edge Function doesn't support gte/lte yet)
+    const start = startDate.toISOString().split("T")[0];
+    const end = endDate.toISOString().split("T")[0];
+    
+    return (data || []).filter((day) => {
+      const dayStr = day.day;
+      return dayStr >= start && dayStr <= end;
+    });
+  } catch (error) {
+    throw new Error(`Failed to fetch business days: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data || [];
 }
 
 /**
@@ -85,122 +80,141 @@ export async function getBusinessDaysForWeek(weekStart: Date): Promise<BusinessD
 }
 
 /**
- * Upsert business day (insert or update)
+ * Upsert business day (insert or update via Edge Function)
  */
 export async function upsertBusinessDay(
   day: string, // YYYY-MM-DD
   status: "open" | "holiday" | "closed"
 ): Promise<BusinessDay> {
-  const { data, error } = await (supabase
-    .from("business_days") as any)
-    .upsert(
-      {
-        day,
-        status
-      },
-      {
-        onConflict: "day"
-      }
-    )
-    .select()
-    .single();
+  try {
+    // Check if exists
+    const existing = await selectFromTable<BusinessDay>("business_days", {
+      where: { day },
+      limit: 1
+    });
 
-  if (error) {
-    throw new Error(`Failed to upsert business day: ${error.message}`);
+    if (existing && existing.length > 0) {
+      // Update existing
+      const updated = await updateTable<BusinessDay>("business_days", { status }, { day });
+      return updated[0];
+    } else {
+      // Insert new
+      const inserted = await insertIntoTable<BusinessDay>("business_days", { day, status });
+      return inserted;
+    }
+  } catch (error) {
+    throw new Error(`Failed to upsert business day: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data;
 }
 
 /**
- * Delete business day (remove from table)
+ * Delete business day (remove from table via Edge Function)
+ * If the record doesn't exist, it's treated as success (idempotent operation)
  */
 export async function deleteBusinessDay(day: string): Promise<void> {
-  const { error } = await (supabase.from("business_days") as any).delete().eq("day", day);
-
-  if (error) {
-    throw new Error(`Failed to delete business day: ${error.message}`);
+  try {
+    await deleteFromTable("business_days", { day });
+  } catch (error) {
+    // If the error indicates the record doesn't exist, treat it as success
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes("No rows") || errorMessage.includes("not found") || errorMessage.includes("PGRST116")) {
+      // Record doesn't exist - this is fine, deletion is idempotent
+      return;
+    }
+    throw new Error(`Failed to delete business day: ${errorMessage}`);
   }
 }
 
 /**
- * Get business hours override for a date
+ * Get business hours override for a date (via Edge Function)
  */
 export async function getBusinessHoursOverride(
   day: string // YYYY-MM-DD
 ): Promise<BusinessHoursOverride | null> {
-  const { data, error } = await (supabase
-    .from("business_hours_overrides") as any)
-    .select("*")
-    .eq("day", day)
-    .single();
-
-  if (error) {
-    if (error.code === "PGRST116") {
-      return null;
-    }
-    throw new Error(`Failed to fetch business hours override: ${error.message}`);
+  try {
+    const data = await selectFromTable<BusinessHoursOverride>("business_hours_overrides", {
+      where: { day },
+      limit: 1
+    });
+    return data && data.length > 0 ? data[0] : null;
+  } catch (error) {
+    // If error occurs, assume not found
+    return null;
   }
-
-  return data;
 }
 
 /**
- * Get business hours overrides for a date range
+ * Get business hours overrides for a date range (via Edge Function)
  */
 export async function getBusinessHoursOverrides(
   startDate: Date,
   endDate: Date
 ): Promise<BusinessHoursOverride[]> {
-  const start = startDate.toISOString().split("T")[0];
-  const end = endDate.toISOString().split("T")[0];
+  try {
+    const data = await selectFromTable<BusinessHoursOverride>("business_hours_overrides", {
+      order: { column: "day", ascending: true }
+    });
 
-  const { data, error } = await (supabase
-    .from("business_hours_overrides") as any)
-    .select("*")
-    .gte("day", start)
-    .lte("day", end)
-    .order("day", { ascending: true });
-
-  if (error) {
-    throw new Error(`Failed to fetch business hours overrides: ${error.message}`);
+    // Filter by date range (Edge Function doesn't support gte/lte yet)
+    const start = startDate.toISOString().split("T")[0];
+    const end = endDate.toISOString().split("T")[0];
+    
+    return (data || []).filter((override) => {
+      const dayStr = override.day;
+      return dayStr >= start && dayStr <= end;
+    });
+  } catch (error) {
+    throw new Error(`Failed to fetch business hours overrides: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data || [];
 }
 
 /**
- * Upsert business hours override
+ * Upsert business hours override (via Edge Function)
  */
 export async function upsertBusinessHoursOverride(
   override: BusinessHoursOverrideInsert
 ): Promise<BusinessHoursOverride> {
-  const { data, error } = await (supabase
-    .from("business_hours_overrides") as any)
-    .upsert(override, {
-      onConflict: "day"
-    })
-    .select()
-    .single();
+  try {
+    // Check if exists
+    const existing = await selectFromTable<BusinessHoursOverride>("business_hours_overrides", {
+      where: { day: override.day },
+      limit: 1
+    });
 
-  if (error) {
-    throw new Error(`Failed to upsert business hours override: ${error.message}`);
+    if (existing && existing.length > 0) {
+      // Update existing
+      const updated = await updateTable<BusinessHoursOverride>("business_hours_overrides", override, { day: override.day });
+      return updated[0];
+    } else {
+      // Insert new
+      const inserted = await insertIntoTable<BusinessHoursOverride>("business_hours_overrides", override);
+      return inserted;
+    }
+  } catch (error) {
+    throw new Error(`Failed to upsert business hours override: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data;
 }
 
 /**
- * Delete business hours override
+ * Delete business hours override (via Edge Function)
+ * If the record doesn't exist, it's treated as success (idempotent operation)
  */
 export async function deleteBusinessHoursOverride(day: string): Promise<void> {
-  const { error } = await (supabase
-    .from("business_hours_overrides") as any)
-    .delete()
-    .eq("day", day);
-
-  if (error) {
-    throw new Error(`Failed to delete business hours override: ${error.message}`);
+  try {
+    await deleteFromTable("business_hours_overrides", { day });
+  } catch (error) {
+    // If error is about no rows being affected, treat as success (idempotent)
+    const errorMsg = error instanceof Error ? error.message.toLowerCase() : "";
+    if (errorMsg.includes("no rows") || errorMsg.includes("not found") || errorMsg.includes("pgrst116")) {
+      // No rows to delete is fine - treat as success
+      return;
+    }
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes("No rows") || errorMessage.includes("not found") || errorMessage.includes("PGRST116")) {
+      // Record doesn't exist - this is fine, deletion is idempotent
+      return;
+    }
+    throw new Error(`Failed to delete business hours override: ${errorMessage}`);
   }
 }
 

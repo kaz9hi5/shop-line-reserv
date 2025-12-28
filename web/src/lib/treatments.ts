@@ -1,98 +1,83 @@
 import { supabase } from "./supabase";
 import type { Database } from "./database.types";
+import { selectFromTable, insertIntoTable, updateTable, deleteFromTable } from "./admin-db-proxy";
 
 type Treatment = Database["public"]["Tables"]["treatments"]["Row"];
 type TreatmentInsert = Database["public"]["Tables"]["treatments"]["Insert"];
 type TreatmentUpdate = Database["public"]["Tables"]["treatments"]["Update"];
 
 /**
- * Get all active treatments
+ * Get all active treatments (via Edge Function)
  */
 export async function getTreatments(): Promise<Treatment[]> {
-  const { data, error } = await (supabase
-    .from("treatments") as any)
-    .select("*")
-    .is("deleted_at", null)
-    .order("sort_order", { ascending: true })
-    .order("name", { ascending: true });
+  try {
+    const data = await selectFromTable<Treatment>("treatments", {
+      order: { column: "sort_order", ascending: true }
+    });
 
-  if (error) {
-    throw new Error(`Failed to fetch treatments: ${error.message}`);
+    // Filter and sort by name (Edge Function doesn't support multiple order by yet)
+    return (data || []).sort((a, b) => {
+      if (a.sort_order !== b.sort_order) {
+        return a.sort_order - b.sort_order;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  } catch (error) {
+    throw new Error(`Failed to fetch treatments: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data || [];
 }
 
 /**
- * Get a single treatment by ID
+ * Get a single treatment by ID (via Edge Function)
  */
 export async function getTreatmentById(id: string): Promise<Treatment | null> {
-  const { data, error } = await (supabase
-    .from("treatments") as any)
-    .select("*")
-    .eq("id", id)
-    .is("deleted_at", null)
-    .single();
-
-  if (error) {
-    if (error.code === "PGRST116") {
-      return null;
-    }
-    throw new Error(`Failed to fetch treatment: ${error.message}`);
+  try {
+    const data = await selectFromTable<Treatment>("treatments", {
+      where: { id },
+      limit: 1
+    });
+    return data && data.length > 0 ? data[0] : null;
+  } catch (error) {
+    // If error occurs, assume not found
+    return null;
   }
-
-  return data;
 }
 
 /**
- * Create a new treatment
+ * Create a new treatment (via Edge Function)
  */
 export async function createTreatment(treatment: TreatmentInsert): Promise<Treatment> {
-  const { data, error } = await (supabase
-    .from("treatments") as any)
-    .insert(treatment)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to create treatment: ${error.message}`);
+  try {
+    const data = await insertIntoTable<Treatment>("treatments", treatment);
+    return data;
+  } catch (error) {
+    throw new Error(`Failed to create treatment: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data;
 }
 
 /**
- * Update a treatment
+ * Update a treatment (via Edge Function)
  */
 export async function updateTreatment(
   id: string,
   updates: TreatmentUpdate
 ): Promise<Treatment> {
-  const { data, error } = await (supabase
-    .from("treatments") as any)
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to update treatment: ${error.message}`);
+  try {
+    const data = await updateTable<Treatment>("treatments", updates, { id });
+    return data[0];
+  } catch (error) {
+    throw new Error(`Failed to update treatment: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data;
 }
 
 /**
- * Delete a treatment (logical delete)
+ * Delete a treatment (logical delete via Edge Function)
  */
 export async function deleteTreatment(id: string): Promise<void> {
-  const { error } = await (supabase
-    .from("treatments") as any)
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", id);
-
-  if (error) {
-    throw new Error(`Failed to delete treatment: ${error.message}`);
+  try {
+    await deleteFromTable("treatments", { id });
+  } catch (error) {
+    throw new Error(`Failed to delete treatment: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }
 

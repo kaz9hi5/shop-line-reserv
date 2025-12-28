@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { AdminReservation } from "@/components/admin/reservationTypes";
 
-function buildTimeSlots(startHour = 10, endHour = 19, intervalMinutes = 60) {
+function buildTimeSlots(startHour = 7, endHour = 23, intervalMinutes = 60) {
   const out: string[] = [];
   for (let h = startHour; h <= endHour; h++) {
     for (let m = 0; m < 60; m += intervalMinutes) {

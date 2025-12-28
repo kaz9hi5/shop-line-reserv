@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import type { Database } from "./database.types";
 import type { AdminReservation } from "@/components/admin/reservationTypes";
+import { selectFromTable, insertIntoTable, updateTable, deleteFromTable, callRpc } from "./admin-db-proxy";
 
 export type Reservation = Database["public"]["Tables"]["reservations"]["Row"];
 type ReservationInsert = Database["public"]["Tables"]["reservations"]["Insert"];
@@ -36,7 +37,7 @@ export function toAdminReservation(reservation: Reservation): AdminReservation {
 }
 
 /**
- * Get reservations for a specific date range
+ * Get reservations for a specific date range (via Edge Function)
  */
 export async function getReservationsByDateRange(
   startDate: Date,
@@ -45,19 +46,22 @@ export async function getReservationsByDateRange(
   const start = startDate.toISOString();
   const end = endDate.toISOString();
 
-  const { data, error } = await (supabase
-    .from("reservations") as any)
-    .select("*")
-    .gte("start_at", start)
-    .lt("start_at", end)
-    .is("deleted_at", null)
-    .order("start_at", { ascending: true });
+  try {
+    const data = await selectFromTable<Reservation>("reservations", {
+      where: {
+        deleted_at: null
+      },
+      order: { column: "start_at", ascending: true }
+    });
 
-  if (error) {
-    throw new Error(`Failed to fetch reservations: ${error.message}`);
+    // Filter by date range (Edge Function doesn't support complex where conditions yet)
+    return (data || []).filter((r) => {
+      const startAt = new Date(r.start_at);
+      return startAt >= startDate && startAt < endDate;
+    });
+  } catch (error) {
+    throw new Error(`Failed to fetch reservations: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data || [];
 }
 
 /**
@@ -81,44 +85,33 @@ export async function getAdminReservationsByDate(date: Date): Promise<AdminReser
 }
 
 /**
- * Get a single reservation by ID
+ * Get a single reservation by ID (via Edge Function)
  */
 export async function getReservationById(id: string): Promise<Reservation | null> {
-  const { data, error } = await (supabase
-    .from("reservations") as any)
-    .select("*")
-    .eq("id", id)
-    .is("deleted_at", null)
-    .single();
-
-  if (error) {
-    if (error.code === "PGRST116") {
-      // Not found
-      return null;
-    }
-    throw new Error(`Failed to fetch reservation: ${error.message}`);
+  try {
+    const data = await selectFromTable<Reservation>("reservations", {
+      where: { id, deleted_at: null },
+      limit: 1
+    });
+    return data && data.length > 0 ? data[0] : null;
+  } catch (error) {
+    // If error occurs, assume not found
+    return null;
   }
-
-  return data;
 }
 
 /**
- * Create a new reservation
+ * Create a new reservation (via Edge Function)
  */
 export async function createReservation(
   reservation: ReservationInsert
 ): Promise<Reservation> {
-  const { data, error } = await (supabase
-    .from("reservations") as any)
-    .insert(reservation)
-    .select()
-    .single();
-
-  if (error) {
-    throw new Error(`Failed to create reservation: ${error.message}`);
+  try {
+    const data = await insertIntoTable<Reservation>("reservations", reservation);
+    return data;
+  } catch (error) {
+    throw new Error(`Failed to create reservation: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  return data;
 }
 
 /**
@@ -159,13 +152,12 @@ export async function changeReservation(
   }
 
   // Logical delete old reservation (without incrementing cancel count)
-  const { error: deleteError } = await (supabase
-    .from("reservations") as any)
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", oldReservationId);
-
-  if (deleteError) {
-    throw new Error(`Failed to delete old reservation: ${deleteError.message}`);
+  try {
+    await updateTable("reservations", {
+      deleted_at: new Date().toISOString()
+    }, { id: oldReservationId });
+  } catch (error) {
+    throw new Error(`Failed to delete old reservation: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 
   // Create new reservation
@@ -200,7 +192,7 @@ export async function updateReservation(
 }
 
 /**
- * Cancel a reservation (logical delete)
+ * Cancel a reservation (logical delete via Edge Function)
  */
 export async function cancelReservation(id: string): Promise<void> {
   // Get reservation to get LINE user ID for counter
@@ -209,30 +201,29 @@ export async function cancelReservation(id: string): Promise<void> {
     throw new Error("Reservation not found");
   }
 
-  const { error } = await (supabase
-    .from("reservations") as any)
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", id);
+  try {
+    await updateTable("reservations", {
+      deleted_at: new Date().toISOString()
+    }, { id });
 
-  if (error) {
-    throw new Error(`Failed to cancel reservation: ${error.message}`);
+    // Increment cancel count (import dynamically to avoid circular dependency)
+    const { incrementCancelCount } = await import("./counters");
+    await incrementCancelCount(reservation.line_user_id);
+  } catch (error) {
+    throw new Error(`Failed to cancel reservation: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  // Increment cancel count (import dynamically to avoid circular dependency)
-  const { incrementCancelCount } = await import("./counters");
-  await incrementCancelCount(reservation.line_user_id);
 }
 
 /**
- * Mark reservation as arrived and reset counters
+ * Mark reservation as arrived and reset counters (via Edge Function)
  */
 export async function markReservationArrived(reservationId: string): Promise<void> {
-  const { error } = await (supabase.rpc as any)("mark_arrived_and_reset_counts", {
-    p_reservation_id: reservationId
-  });
-
-  if (error) {
-    throw new Error(`Failed to mark reservation as arrived: ${error.message}`);
+  try {
+    await callRpc("mark_arrived_and_reset_counts", {
+      p_reservation_id: reservationId
+    });
+  } catch (error) {
+    throw new Error(`Failed to mark reservation as arrived: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 }
 

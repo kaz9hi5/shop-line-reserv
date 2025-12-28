@@ -6,20 +6,24 @@ export function Modal({
   title,
   children,
   onClose,
-  footer
+  footer,
+  disableEscape
 }: {
   title?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
   onClose: () => void;
+  disableEscape?: boolean;
 }) {
   useEffect(() => {
+    if (disableEscape) return;
+    
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, disableEscape]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">

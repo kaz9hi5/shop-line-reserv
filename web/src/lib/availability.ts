@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 import type { Database } from "./database.types";
 import type { Reservation } from "./reservations";
+import { selectFromTable } from "./admin-db-proxy";
 
 type AppSettings = Database["public"]["Tables"]["app_settings"]["Row"];
 type BusinessHoursOverride = Database["public"]["Tables"]["business_hours_overrides"]["Row"];
@@ -14,24 +15,23 @@ interface BusinessHours {
 }
 
 /**
- * Get app settings
+ * Get app settings (via Edge Function)
  */
 async function getAppSettings(): Promise<AppSettings> {
-  const { data, error } = await (supabase
-    .from("app_settings") as any)
-    .select("*")
-    .eq("id", true)
-    .single();
+  try {
+    const data = await selectFromTable<AppSettings>("app_settings", {
+      where: { id: true },
+      limit: 1
+    });
+    
+    if (!data || data.length === 0) {
+      throw new Error("App settings not found");
+    }
 
-  if (error) {
-    throw new Error(`Failed to fetch app settings: ${error.message}`);
+    return data[0];
+  } catch (error) {
+    throw new Error(`Failed to fetch app settings: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
-
-  if (!data) {
-    throw new Error("App settings not found");
-  }
-
-  return data;
 }
 
 /**
@@ -41,12 +41,12 @@ export async function getBusinessHoursForDate(date: Date): Promise<BusinessHours
   const settings = await getAppSettings();
   const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD
 
-  // Check for override
-  const { data: override } = await (supabase
-    .from("business_hours_overrides") as any)
-    .select("*")
-    .eq("day", dateStr)
-    .single();
+  // Check for override (via Edge Function)
+  const overrideData = await selectFromTable<BusinessHoursOverride>("business_hours_overrides", {
+    where: { day: dateStr },
+    limit: 1
+  });
+  const override = overrideData && overrideData.length > 0 ? overrideData[0] : null;
 
   if (override) {
     const overrideTyped = override as BusinessHoursOverride;

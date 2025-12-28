@@ -5,6 +5,7 @@ import { AdminHeader } from "@/components/admin/AdminHeader";
 import { DayCalendar } from "@/components/admin/DayCalendar";
 import { AdminNav } from "@/components/admin/AdminNav";
 import { Card } from "@/components/ui/Card";
+import { BusyOverlay } from "@/components/ui/BusyOverlay";
 import { MonthCalendar } from "@/components/admin/MonthCalendar";
 import type { AdminReservation } from "@/components/admin/reservationTypes";
 import { ReservationDetailModal } from "@/components/admin/ReservationDetailModal";
@@ -102,9 +103,22 @@ export default function AdminPage() {
   const [create, setCreate] = useState<{ time: string } | null>(null);
   const [edit, setEdit] = useState<AdminReservation | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Auto-dismiss flash after 5000ms
+  useEffect(() => {
+    if (!flash) return;
+    const t = window.setTimeout(() => setFlash(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [flash]);
+
+  const dismissFlash = () => {
+    setFlash(null);
+  };
 
   const handleArrive = async (r: AdminReservation) => {
     try {
+      setSaving(true);
       await markReservationArrived(r.id);
       // Reload reservations to reflect the change
       const data = await getAdminReservationsByDate(currentDate);
@@ -112,11 +126,14 @@ export default function AdminPage() {
       setFlash("来店を確認しました。予約キャンセル・変更回数をリセットしました");
     } catch (err) {
       setFlash(`エラー: ${err instanceof Error ? err.message : "来店確認に失敗しました"}`);
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
     <div className="space-y-4">
+      <BusyOverlay active={saving} label="保存中..." />
       {flash ? (
         <div className="sticky top-3 z-40">
           <div className="mx-auto max-w-5xl px-4">
@@ -124,7 +141,7 @@ export default function AdminPage() {
               <div className="min-w-0 truncate">{flash}</div>
               <button
                 type="button"
-                onClick={() => setFlash(null)}
+                onClick={dismissFlash}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-xl text-white/80 hover:bg-white/10"
                 aria-label="閉じる"
               >

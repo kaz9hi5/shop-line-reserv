@@ -23,7 +23,6 @@ export interface Database {
           default_lunch_enabled: boolean;
           default_lunch_start: string | null;
           default_lunch_end: string | null;
-          admin_access_log_enabled: boolean;
         };
         Insert: {
           id?: boolean;
@@ -35,7 +34,6 @@ export interface Database {
           default_lunch_enabled?: boolean;
           default_lunch_start?: string | null;
           default_lunch_end?: string | null;
-          admin_access_log_enabled?: boolean;
         };
         Update: {
           id?: boolean;
@@ -47,7 +45,6 @@ export interface Database {
           default_lunch_enabled?: boolean;
           default_lunch_start?: string | null;
           default_lunch_end?: string | null;
-          admin_access_log_enabled?: boolean;
         };
       };
       admin_allowed_ips: {
@@ -55,48 +52,51 @@ export interface Database {
           ip: string;
           created_at: string;
           updated_at: string;
-          deleted_at: string | null;
+          role: "manager" | "staff" | null;
+          device_fingerprint: string | null;
+          staff_id: string | null;
         };
         Insert: {
           ip: string;
           created_at?: string;
           updated_at?: string;
-          deleted_at?: string | null;
+          role?: "manager" | "staff" | null;
+          device_fingerprint?: string | null;
+          staff_id?: string | null;
         };
         Update: {
           ip?: string;
           created_at?: string;
           updated_at?: string;
-          deleted_at?: string | null;
+          role?: "manager" | "staff" | null;
+          device_fingerprint?: string | null;
+          staff_id?: string | null;
         };
       };
-      admin_access_logs: {
+      staff: {
         Row: {
           id: string;
           created_at: string;
-          ip: string;
-          result: "allowed" | "denied";
-          path: string;
-          user_agent: string | null;
-          note: string | null;
+          updated_at: string;
+          deleted_at: string | null;
+          name: string;
+          role: "manager" | "staff";
         };
         Insert: {
           id?: string;
           created_at?: string;
-          ip: string;
-          result: "allowed" | "denied";
-          path?: string;
-          user_agent?: string | null;
-          note?: string | null;
+          updated_at?: string;
+          deleted_at?: string | null;
+          name: string;
+          role: "manager" | "staff";
         };
         Update: {
           id?: string;
           created_at?: string;
-          ip?: string;
-          result?: "allowed" | "denied";
-          path?: string;
-          user_agent?: string | null;
-          note?: string | null;
+          updated_at?: string;
+          deleted_at?: string | null;
+          name?: string;
+          role?: "manager" | "staff";
         };
       };
       treatments: {
@@ -104,7 +104,6 @@ export interface Database {
           id: string;
           created_at: string;
           updated_at: string;
-          deleted_at: string | null;
           name: string;
           description: string;
           duration_minutes: number;
@@ -115,7 +114,6 @@ export interface Database {
           id?: string;
           created_at?: string;
           updated_at?: string;
-          deleted_at?: string | null;
           name: string;
           description?: string;
           duration_minutes: number;
@@ -126,7 +124,6 @@ export interface Database {
           id?: string;
           created_at?: string;
           updated_at?: string;
-          deleted_at?: string | null;
           name?: string;
           description?: string;
           duration_minutes?: number;
@@ -140,18 +137,21 @@ export interface Database {
           created_at: string;
           updated_at: string;
           status: "open" | "holiday" | "closed";
+          staff_id: string | null;
         };
         Insert: {
           day: string;
           created_at?: string;
           updated_at?: string;
           status: "open" | "holiday" | "closed";
+          staff_id?: string | null;
         };
         Update: {
           day?: string;
           created_at?: string;
           updated_at?: string;
           status?: "open" | "holiday" | "closed";
+          staff_id?: string | null;
         };
       };
       business_hours_overrides: {
@@ -164,6 +164,7 @@ export interface Database {
           lunch_enabled: boolean;
           lunch_start: string | null;
           lunch_end: string | null;
+          staff_id: string | null;
         };
         Insert: {
           day: string;
@@ -174,6 +175,7 @@ export interface Database {
           lunch_enabled?: boolean;
           lunch_start?: string | null;
           lunch_end?: string | null;
+          staff_id?: string | null;
         };
         Update: {
           day?: string;
@@ -184,6 +186,7 @@ export interface Database {
           lunch_enabled?: boolean;
           lunch_start?: string | null;
           lunch_end?: string | null;
+          staff_id?: string | null;
         };
       };
       reservations: {

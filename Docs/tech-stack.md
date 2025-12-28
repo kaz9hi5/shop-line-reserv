@@ -23,13 +23,17 @@
   - LINE メッセージで予約通知を受信
 - **Web 予約画面**: フロントエンド（顧客向け・管理画面）
   - LINE Login で認証済みのユーザーが予約操作を実行
-  - Supabase CRUD に直接接続してデータ操作を実行
-- **Supabase DB**: データベース（予約情報、顧客情報、アクセスログの保存）
-  - 予約情報は論理削除で管理
+  - 管理画面のデータベース操作は Edge Function `admin-db-proxy` 経由で実行（端末情報による権限チェック）
+- **Supabase DB**: データベース（予約情報、顧客情報の保存）
+  - 全 8 テーブルを使用（`app_settings`, `admin_allowed_ips`, `staff`, `treatments`, `business_days`, `business_hours_overrides`, `reservations`, `customer_action_counters`）
+  - 予約情報（`reservations`）は論理削除で管理
+  - 店員情報（`staff`）は論理削除で管理（メンバー編集の削除＝論理削除）
+  - その他のテーブルは物理削除で管理
   - 予約変更時は既存予約を論理削除し、新規予約を作成
   - データ保存後に Edge Function をトリガーして LINE メッセージ送信
-- **Supabase Edge Function**: サーバーレス関数（保存後 LINE メッセージ送信のみ）
-  - DB 保存後に自動的にトリガーされ、LINE メッセージ通知を送信
+- **Supabase Edge Function**: サーバーレス関数
+  - `send-line-message`: DB 保存後に自動的にトリガーされ、LINE メッセージ通知を送信
+  - `admin-db-proxy`: 管理画面のデータベース操作を代理実行し、端末情報に基づく権限チェックを実施
 - **LINE Messaging API**: LINE メッセージ送信サービス
 
 ## フロントエンド
@@ -169,6 +173,30 @@ const { data, error } = await supabase
   - Context API よりもシンプルでパフォーマンスに優れる
   - 必要に応じて採用を検討
 
+### 管理画面のアクセス制御実装
+
+- **AdminAccessContext** (`web/src/components/admin/AdminAccessContext.tsx`)
+
+  - IP アドレスの検出と許可状態を管理する React Context
+  - `getClientIp()` を使用して外部 API から IP アドレスを取得
+  - IP は **初回取得 + 10 秒おきに自動再取得**（画面側に「IP を再取得」ボタンは置かない）
+  - 許可判定は RPC `is_admin_ip_allowed(p_ip, p_device_fingerprint)` を使用（判定は **IP 一致のみ**。`admin_allowed_ips` の direct select はしない）
+  - 許可された場合、RPC `touch_admin_allowed_ip_fingerprint(p_ip, p_device_fingerprint)` により `device_fingerprint` を更新（管理画面トップアクセスのたびに更新）
+
+- **AdminAccessGate** (`web/src/components/admin/AdminAccessGate.tsx`)
+
+  - IP アドレスベースのアクセス制御を実装するコンポーネント
+  - 許可されていない IP からのアクセスをブロックし、403 エラーを表示
+  - 403 画面から現在の IP を許可リストへ追加可能（エラーハンドリング付き）
+  - 403 画面で追加する際は、店長名照合に成功した場合でも **`admin_allowed_ips.staff_id` は `null` のまま登録**する（紐づけ編集は IP 管理ページで行う）
+  - 追加操作は「店長名（`staff`テーブルの`role=manager`の`name`）の一致」を必須とする（RPC `gate_add_allowed_ip` 内で検証）
+  - 403 画面には「IP を再取得」ボタンは置かず、IP 再取得は自動更新で行う
+
+- **IP 管理ページ** (`web/src/app/admin/ip-management/page.tsx`)
+  - 許可 IP アドレスリストの管理画面
+  - IP の削除（拒否）と、`admin_allowed_ips.staff_id` の編集（スタッフ紐づけ編集）
+  - 現在の IP アドレスの自動検出と表示
+
 ### 開発ツール
 
 - **ESLint**
@@ -225,13 +253,19 @@ const { data, error } = await supabase
 supabase/
 ├── migrations/                    # DB スキーマ（SQL マイグレーション）
 │   ├── 0001_init.sql            # 初期スキーマ（全テーブル定義）
-│   └── 0002_rls_minimum.sql     # Row Level Security の最小設定
+│   ├── 0003_visit_reset_counts.sql  # 来店確認（回数リセット）機能
+│   ├── 0004_line_migration.sql   # LINE ユーザー ID への移行
+│   ├── 0005_admin_role_and_device.sql  # 店長・店員の権限管理
+│   ├── 0006_rls_role_based.sql   # Row Level Security の最小設定とロールベースのRLSポリシー
+│   └── 0007_rls_insert_update_delete.sql  # INSERT/UPDATE/DELETE用RLSポリシー
 ├── functions/                    # Edge Functions（サーバーレス関数）
 │   ├── _shared/                 # 共通モジュール
 │   │   ├── cors.ts              # CORS ヘッダー設定
-│   │   └── line.ts              # LINE Messaging API 送信クライアント
-│   └── send-line-message/       # LINE メッセージ送信 Edge Function
-│       └── index.ts             # メイン処理
+│   │   ├── line.ts              # LINE Messaging API 送信クライアント
+│   ├── send-line-message/       # LINE メッセージ送信 Edge Function
+│   │   └── index.ts             # メイン処理
+│   ├── admin-db-proxy/          # 管理画面データベース操作プロキシ Edge Function
+│   │   └── index.ts             # メイン処理（端末情報による権限チェック）
 ├── config.toml                   # Supabase CLI 設定（ローカル開発用）
 └── README.md                    # Supabase 構成の詳細ドキュメント
 ```
@@ -246,27 +280,40 @@ supabase/
 
    - 予約キャンセル・変更期限（1〜48 時間）
    - デフォルト営業時間（開始/終了、昼休憩）
-   - アクセスログ記録の有効/無効
 
 2. **`admin_allowed_ips`** - 管理画面アクセス許可 IP（ホワイトリスト）
 
-   - IP アドレス（主キー）、論理削除対応
+   - IP アドレス（主キー）、物理削除対応
+   - `role` カラム（`manager` または `staff`）- 店長・店員の権限管理
+   - `device_fingerprint` カラム - 端末識別用のデバイスフィンガープリント（管理画面トップアクセスのたびに更新）
+   - **ホワイトリスト機能**: このテーブルに登録されている IP アドレスのみ管理画面にアクセス可能
 
-3. **`admin_access_logs`** - 管理画面アクセスログ
+3. **`staff`** - 店員テーブル（新規追加）
 
-   - 日時、IP、アクセス結果（許可/拒否）、パス、ユーザーエージェント
+   - 店員 ID（主キー）、名前、ロール（`manager` または `staff`）
+   - 店長と店員 n の複数の名前が登録可能
+   - `admin_allowed_ips`テーブルと n:1 の関係
+   - **初期データ**: ロールが`manager`のレコードが登録済み、名前は「店長」
+   - **削除方式**: `staff`テーブルは論理削除で運用（`deleted_at`カラムを持つ想定）
+   - **削除制約**: 店長（`role=manager`）は削除できない
+   - **店員削除時の関連データの扱い**:
+     - `business_days` / `business_hours_overrides` の 2 テーブルにある、削除対象店員（`staff_id`一致）のレコードは **物理削除**
 
 4. **`treatments`** - 施術メニュー
 
-   - 名前、概要、施術時間（分）、価格（円）、論理削除対応
+   - 名前、概要、施術時間（分）、価格（円）、物理削除対応
 
 5. **`business_days`** - 営業日設定（日毎）
 
-   - 日付（主キー）、状態（営業日/休日/定休日）
+   - 日付（主キー）、状態（営業日/休日/定休日）、`staff_id`（店員 ID、店員の営業日を紐付け）
+   - **物理削除テーブル**: `deleted_at`カラムなし、削除は物理削除（`.delete()`）
+   - 店員は自分の営業日のみ設定可能（店員 ID で紐付け）
 
 6. **`business_hours_overrides`** - 日毎の営業時間上書き
 
-   - 日付（主キー）、開始/終了時間、昼休憩設定
+   - 日付（主キー）、開始/終了時間、昼休憩設定、`staff_id`（店員 ID、店員の営業時間を紐付け）
+   - **物理削除テーブル**: `deleted_at`カラムなし、削除は物理削除（`.delete()`）
+   - 店員は自分の営業時間のみ設定可能（店員 ID で紐付け）
 
 7. **`reservations`** - 予約情報
 
@@ -274,13 +321,38 @@ supabase/
    - 施術情報（スナップショット保存）
    - 予約日時（`start_at`, `end_at`）
    - 予約経路（web/phone/admin）
-   - 論理削除対応
+   - `arrived_at` カラム - 来店確認日時
+   - 論理削除対応（`deleted_at`カラムあり）
    - 重複予約防止制約（`reservations_no_overlap_active`）
 
 8. **`customer_action_counters`** - 顧客アクション回数（LINE ユーザー ID 単位）
+   - LINE ユーザー ID（主キー）
    - 予約キャンセル回数、予約変更回数を保持
    - **予約変更フローで発生する「既存予約の論理削除」はキャンセル回数にカウントしない**（変更回数のみ +1）
-   - 来店確認時にリセット（0）
+   - 来店確認時に物理削除（レコードを削除）
+
+**テーブルの削除方式：**
+
+- **論理削除テーブル**（`deleted_at`カラムあり）: `reservations`、`staff`
+
+  - 削除時は`deleted_at`にタイムスタンプを設定
+  - データは物理的には残り、履歴として保持可能
+
+- **物理削除テーブル**（`deleted_at`カラムなし）: `app_settings`、`admin_allowed_ips`、`treatments`、`business_days`、`business_hours_overrides`、`customer_action_counters`
+  - 削除時はデータベースから完全に削除
+  - Edge Function 経由で操作する際、`deleted_at`を参照しないように自動的にフィルタリング
+  - `customer_action_counters`は来店確認時に物理削除される
+
+**現在使用中のテーブル一覧（全 8 テーブル）:**
+
+1. `app_settings` - アプリケーション設定
+2. `admin_allowed_ips` - 管理画面アクセス許可 IP（ホワイトリスト、ロール・デバイスフィンガープリント）
+3. `staff` - 店員テーブル（店長・店員の名前を管理、初期データとして店長レコードが登録済み）
+4. `treatments` - 施術メニュー
+5. `business_days` - 営業日設定（店員 ID で紐付け）
+6. `business_hours_overrides` - 日毎の営業時間上書き（店員 ID で紐付け）
+7. `reservations` - 予約情報（LINE ユーザー ID ベース、論理削除）
+8. `customer_action_counters` - 顧客アクション回数（LINE ユーザー ID 単位、来店確認時に物理削除）
 
 **主な機能：**
 
@@ -292,15 +364,42 @@ supabase/
 
 **`0002_rls_minimum.sql` - Row Level Security の最小設定**
 
-- 管理系テーブル（`app_settings`, `admin_allowed_ips`, `admin_access_logs`）に RLS を有効化
+- 管理系テーブル（`app_settings`, `admin_allowed_ips`）に RLS を有効化
 - デフォルトはアクセス拒否（ポリシー未設定のため）
 - 顧客向けテーブルは必要に応じて後から RLS を有効化可能
+
+**注意**: `admin_allowed_ips` テーブルには RLS ポリシーが必要です。初期セットアップのため、パブリックアクセスを許可するポリシーを追加する必要があります（マイグレーション `0005_admin_allowed_ips_rls.sql` を参照）。
 
 **`0003_visit_reset_counts.sql` - 来店確認（回数リセット）**
 
 - **`customer_action_counters`** テーブルを追加（LINE ユーザー ID 単位のキャンセル/変更回数）
 - `reservations` に **`arrived_at`** を追加（来店済み記録）
 - まとめて処理するための DB 関数 **`mark_arrived_and_reset_counts(reservation_id)`** を追加
+
+**`0004_line_migration.sql` - LINE ユーザー ID への移行**
+
+- `reservations` テーブルに LINE 関連カラムを追加（`line_user_id`, `line_display_name`）
+- 電話番号ベースから LINE ユーザー ID ベースへの移行
+- 既存データの移行処理を含む
+
+**`0005_admin_role_and_device.sql` - 店長・店員の権限管理**
+
+- `admin_allowed_ips` テーブルに `role` カラムを追加（`manager` または `staff`）
+- `device_fingerprint` カラムを追加（端末識別用）
+- 端末情報による店長・店員の区別を可能にする
+
+**`0006_rls_role_based.sql` - ロールベースの RLS ポリシー**
+
+- すべての管理テーブルに RLS を有効化
+- 店員は `reservations` テーブルのみアクセス可能
+- 店長はすべてのテーブルにアクセス可能
+- 注意: Edge Function 経由の場合は service_role で RLS をバイパスし、Edge Function 内で権限チェックを実装
+
+**`0007_rls_insert_update_delete.sql` - INSERT/UPDATE/DELETE 用 RLS ポリシー**
+
+- すべてのテーブルに INSERT/UPDATE/DELETE 操作の RLS ポリシーを追加
+- Edge Function 経由でアクセスするため、実際の権限チェックは Edge Function 内で実施
+- 直接データベースアクセス（もしあれば）のためのフォールバックポリシー
 
 #### Edge Functions（functions/）
 
@@ -312,6 +411,51 @@ supabase/
 - **必要な環境変数**:
   - `LINE_CHANNEL_ACCESS_TOKEN` - LINE Channel Access Token
   - `LINE_CHANNEL_SECRET` - LINE Channel Secret（Webhook 検証用、必要に応じて）
+
+**`admin-db-proxy` - 管理画面データベース操作プロキシ Edge Function**
+
+- **機能**: 端末情報を取得して権限チェックを行い、データベース操作を実行
+- **端末識別**: User-Agent、Accept-Language、Accept-Encoding からデバイスフィンガープリントを生成
+- **権限チェック**: `admin_allowed_ips` テーブルから IP アドレスまたはデバイスフィンガープリントでロールを取得
+- **ロールベースアクセス制御**:
+  - 店員（`staff`）: `reservations`、`business_days`、`business_hours_overrides` テーブルのみアクセス可能
+  - 店長（`manager`）: すべてのテーブルにアクセス可能
+- **リクエスト形式**: POST で `operation`（select/insert/update/delete/rpc）、`table`、`query`、`data` などを受け取る
+- **レスポンス形式**: `{ ok: boolean, data?: any, error?: string, role?: string }`
+- **必要な環境変数**:
+  - `SUPABASE_URL` - Supabase プロジェクトの URL
+  - `SUPABASE_SERVICE_ROLE_KEY` - Supabase Service Role Key（RLS をバイパス）
+
+**テーブルタイプの扱い:**
+
+- **物理削除テーブル**（`deleted_at`カラムなし）: `app_settings`、`admin_allowed_ips`、`treatments`、`business_days`、`business_hours_overrides`、`customer_action_counters`
+
+  - 削除操作は物理削除（`.delete()`）を使用
+  - `select`、`update`、`delete`操作で`deleted_at`を参照しない（自動的にフィルタリング）
+  - 存在しないレコードの削除は成功として扱う（べき等性）
+
+- **論理削除テーブル**（`deleted_at`カラムあり）: `reservations`、`staff`
+  - 削除操作は論理削除（`deleted_at`を設定）を使用
+  - `select`操作で`deleted_at IS NULL`を条件に追加可能
+
+**削除操作の仕様（Idempotent Operation）:**
+
+- **削除操作はべき等性（Idempotent）を持つ**: 存在しないレコードを削除しようとした場合、エラーではなく成功として扱います
+- **理由**: 同じ削除操作を複数回実行しても結果が同じになるべき（べき等性の原則）
+- **対象テーブル**: すべてのテーブルで適用されますが、特に物理削除テーブルで重要です
+- **実装詳細**:
+  - 物理削除テーブルの場合、存在しないレコードの削除は成功として扱います
+  - 論理削除テーブル（`reservations`）の場合も同様に、既に削除済みのレコードの削除は成功として扱います
+  - エラーメッセージに以下の文字列が含まれる場合、削除は成功として扱われます：
+    - `"No rows"` - 削除対象の行が存在しない
+    - `"not found"` - レコードが見つからない
+    - `"PGRST116"` - Supabase PostgREST のエラーコード（レコードが見つからない）
+
+**エラーメッセージの意味:**
+
+- **`"No rows"`**: 削除操作を実行したが、条件に一致する行が存在しなかったことを示します。これはエラーではなく、削除操作が正常に完了したことを意味します（削除対象が既に存在しない状態）。
+- **`"not found"`**: 指定されたレコードが見つからなかったことを示します。削除操作においては、これは正常な状態です（削除対象が既に存在しない）。
+- **`"PGRST116"`**: Supabase PostgREST（RESTful API レイヤー）のエラーコードで、レコードが見つからないことを示します。`PGRST116` は「No rows returned」を意味し、削除操作においては正常な状態です。
 
 **`_shared/cors.ts`** - CORS ヘッダー設定
 
@@ -325,7 +469,7 @@ supabase/
 
 ### IP アドレス制限の実装
 
-管理画面へのアクセス制限は、Supabase の RLS（Row Level Security）またはフロントエンド側で実装します。
+管理画面へのアクセス制限は、フロントエンド側で実装します。
 
 **IP アドレスリストの扱い：**
 
@@ -335,19 +479,30 @@ supabase/
 
 **実装方法：**
 
-- Supabase RLS で IP アドレスベースのアクセス制御を実装
-- または、フロントエンド側で IP アドレスをチェックし、許可 IP 以外からのアクセスをブロック
-- 許可 IP アドレスリストは Supabase DB に保存
+- フロントエンド側で IP アドレスをチェックし、許可 IP 以外からのアクセスをブロック
+- 許可 IP アドレスリストは Supabase DB に保存（`admin_allowed_ips` テーブル）
+- IP アドレスの検出は外部 API（ipify.org）を使用
+- `AdminAccessContext` コンポーネントで IP アドレスの検出と許可状態の管理を実装
+- `AdminAccessGate` コンポーネントでアクセス制御を実装
+- **Edge Function 経由のデータベース操作**: `admin-db-proxy` Edge Function を使用してすべてのデータベース操作を実行
+- **端末情報による識別**: User-Agent などのブラウザ情報からデバイスフィンガープリントを生成し、端末を識別
+- **ロールベースアクセス制御**: 店長（`manager`）と店員（`staff`）のロールに基づいてアクセス権限を制御
+  - 店員: `reservations` テーブルのみアクセス可能
+  - 店長: すべてのテーブルにアクセス可能
 
-**アクセスログ機能：**
+**IP 管理機能の実装詳細：**
 
-- すべての管理画面アクセス試行を Supabase DB に記録
-- 記録項目：日時、IP アドレス、アクセス結果（許可/拒否）
-- IP アドレス選定のためのアクセス履歴確認に利用
-- **アクセスログ記録の制御機能**
-  - 設定画面からアクセスログの記録を ON/OFF 可能
-  - 設定は Supabase DB に保存
-  - フロントエンドまたは RLS で設定を参照し、記録の有無を制御
+- **IP アドレスの検出**: `getClientIp()` 関数で外部 API から IP アドレスを取得
+- **許可状態のチェック**: `isIpAllowed()` 関数で DB から許可 IP リストを確認
+- **IP 追加・削除**: `addAllowedIp()` / `removeAllowedIp()` 関数で DB に CRUD 操作を実行
+- **状態管理**: React Context API を使用して IP アドレスと許可状態を管理
+- **自動更新**: IP 追加・削除時にコンテキストの状態を自動更新し、許可状態を再チェック
+
+**IP アドレス制限（ホワイトリスト）：**
+
+- `admin_allowed_ips`テーブルに登録されている IP アドレスのみ管理画面にアクセス可能
+- IP アドレスリストは店長が管理（店長のみアクセス可能）
+- ホワイトリスト方式（リストに存在する IP のみ許可、それ以外は拒否）
 
 ## LINE API
 
