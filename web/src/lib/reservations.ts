@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 import type { Database } from "./database.types";
 import type { AdminReservation } from "@/components/admin/reservationTypes";
 
-type Reservation = Database["public"]["Tables"]["reservations"]["Row"];
+export type Reservation = Database["public"]["Tables"]["reservations"]["Row"];
 type ReservationInsert = Database["public"]["Tables"]["reservations"]["Insert"];
 type ReservationUpdate = Database["public"]["Tables"]["reservations"]["Update"];
 
@@ -45,8 +45,8 @@ export async function getReservationsByDateRange(
   const start = startDate.toISOString();
   const end = endDate.toISOString();
 
-  const { data, error } = await supabase
-    .from("reservations")
+  const { data, error } = await (supabase
+    .from("reservations") as any)
     .select("*")
     .gte("start_at", start)
     .lt("start_at", end)
@@ -84,8 +84,8 @@ export async function getAdminReservationsByDate(date: Date): Promise<AdminReser
  * Get a single reservation by ID
  */
 export async function getReservationById(id: string): Promise<Reservation | null> {
-  const { data, error } = await supabase
-    .from("reservations")
+  const { data, error } = await (supabase
+    .from("reservations") as any)
     .select("*")
     .eq("id", id)
     .is("deleted_at", null)
@@ -108,8 +108,8 @@ export async function getReservationById(id: string): Promise<Reservation | null
 export async function createReservation(
   reservation: ReservationInsert
 ): Promise<Reservation> {
-  const { data, error } = await supabase
-    .from("reservations")
+  const { data, error } = await (supabase
+    .from("reservations") as any)
     .insert(reservation)
     .select()
     .single();
@@ -159,8 +159,8 @@ export async function changeReservation(
   }
 
   // Logical delete old reservation (without incrementing cancel count)
-  const { error: deleteError } = await supabase
-    .from("reservations")
+  const { error: deleteError } = await (supabase
+    .from("reservations") as any)
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", oldReservationId);
 
@@ -185,8 +185,8 @@ export async function updateReservation(
   id: string,
   updates: ReservationUpdate
 ): Promise<Reservation> {
-  const { data, error } = await supabase
-    .from("reservations")
+  const { data, error } = await (supabase
+    .from("reservations") as any)
     .update(updates)
     .eq("id", id)
     .select()
@@ -209,8 +209,8 @@ export async function cancelReservation(id: string): Promise<void> {
     throw new Error("Reservation not found");
   }
 
-  const { error } = await supabase
-    .from("reservations")
+  const { error } = await (supabase
+    .from("reservations") as any)
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", id);
 
@@ -227,7 +227,7 @@ export async function cancelReservation(id: string): Promise<void> {
  * Mark reservation as arrived and reset counters
  */
 export async function markReservationArrived(reservationId: string): Promise<void> {
-  const { error } = await supabase.rpc("mark_arrived_and_reset_counts", {
+  const { error } = await (supabase.rpc as any)("mark_arrived_and_reset_counts", {
     p_reservation_id: reservationId
   });
 

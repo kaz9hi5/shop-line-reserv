@@ -12,8 +12,8 @@ type AdminAllowedIpInsert = Database["public"]["Tables"]["admin_allowed_ips"]["I
 export async function logAdminAccess(
   log: AccessLogInsert
 ): Promise<AccessLog> {
-  const { data, error } = await supabase
-    .from("admin_access_logs")
+  const { data, error } = await (supabase
+    .from("admin_access_logs") as any)
     .insert(log)
     .select()
     .single();
@@ -89,17 +89,17 @@ export async function getAllowedIps(): Promise<AdminAllowedIp[]> {
  */
 export async function addAllowedIp(ip: string): Promise<AdminAllowedIp> {
   // Check if IP already exists (even if deleted)
-  const { data: existing } = await supabase
-    .from("admin_allowed_ips")
+  const { data: existing } = await (supabase
+    .from("admin_allowed_ips") as any)
     .select("*")
     .eq("ip", ip)
     .single();
 
   if (existing) {
     // If deleted, restore it
-    if (existing.deleted_at) {
-      const { data, error } = await supabase
-        .from("admin_allowed_ips")
+    if ((existing as AdminAllowedIp).deleted_at) {
+      const { data, error } = await (supabase
+        .from("admin_allowed_ips") as any)
         .update({ deleted_at: null })
         .eq("ip", ip)
         .select()
@@ -116,8 +116,8 @@ export async function addAllowedIp(ip: string): Promise<AdminAllowedIp> {
   }
 
   // Create new
-  const { data, error } = await supabase
-    .from("admin_allowed_ips")
+  const { data, error } = await (supabase
+    .from("admin_allowed_ips") as any)
     .insert({ ip })
     .select()
     .single();
@@ -133,8 +133,8 @@ export async function addAllowedIp(ip: string): Promise<AdminAllowedIp> {
  * Remove allowed IP (logical delete)
  */
 export async function removeAllowedIp(ip: string): Promise<void> {
-  const { error } = await supabase
-    .from("admin_allowed_ips")
+  const { error } = await (supabase
+    .from("admin_allowed_ips") as any)
     .update({ deleted_at: new Date().toISOString() })
     .eq("ip", ip);
 
@@ -168,8 +168,8 @@ export async function isIpAllowed(ip: string): Promise<boolean> {
  * Get access log enabled setting
  */
 export async function isAccessLogEnabled(): Promise<boolean> {
-  const { data, error } = await supabase
-    .from("app_settings")
+  const { data, error } = await (supabase
+    .from("app_settings") as any)
     .select("admin_access_log_enabled")
     .eq("id", true)
     .single();
@@ -178,15 +178,15 @@ export async function isAccessLogEnabled(): Promise<boolean> {
     throw new Error(`Failed to fetch access log setting: ${error.message}`);
   }
 
-  return data?.admin_access_log_enabled ?? true;
+  return (data as any)?.admin_access_log_enabled ?? true;
 }
 
 /**
  * Set access log enabled setting
  */
 export async function setAccessLogEnabled(enabled: boolean): Promise<void> {
-  const { error } = await supabase
-    .from("app_settings")
+  const { error } = await (supabase
+    .from("app_settings") as any)
     .update({ admin_access_log_enabled: enabled })
     .eq("id", true);
 

@@ -17,8 +17,8 @@ interface BusinessHours {
  * Get app settings
  */
 async function getAppSettings(): Promise<AppSettings> {
-  const { data, error } = await supabase
-    .from("app_settings")
+  const { data, error } = await (supabase
+    .from("app_settings") as any)
     .select("*")
     .eq("id", true)
     .single();
@@ -42,19 +42,20 @@ export async function getBusinessHoursForDate(date: Date): Promise<BusinessHours
   const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD
 
   // Check for override
-  const { data: override } = await supabase
-    .from("business_hours_overrides")
+  const { data: override } = await (supabase
+    .from("business_hours_overrides") as any)
     .select("*")
     .eq("day", dateStr)
     .single();
 
   if (override) {
+    const overrideTyped = override as BusinessHoursOverride;
     return {
-      openTime: override.open_time,
-      closeTime: override.close_time,
-      lunchEnabled: override.lunch_enabled,
-      lunchStart: override.lunch_start || undefined,
-      lunchEnd: override.lunch_end || undefined
+      openTime: overrideTyped.open_time,
+      closeTime: overrideTyped.close_time,
+      lunchEnabled: overrideTyped.lunch_enabled,
+      lunchStart: overrideTyped.lunch_start || undefined,
+      lunchEnd: overrideTyped.lunch_end || undefined
     };
   }
 

@@ -14,8 +14,8 @@ type BusinessHoursOverrideUpdate = Database["public"]["Tables"]["business_hours_
  * Get app settings
  */
 export async function getAppSettings(): Promise<AppSettings> {
-  const { data, error } = await supabase
-    .from("app_settings")
+  const { data, error } = await (supabase
+    .from("app_settings") as any)
     .select("*")
     .eq("id", true)
     .single();
@@ -37,8 +37,8 @@ export async function getAppSettings(): Promise<AppSettings> {
 export async function updateAppSettings(
   updates: AppSettingsUpdate
 ): Promise<AppSettings> {
-  const { data, error } = await supabase
-    .from("app_settings")
+  const { data, error } = await (supabase
+    .from("app_settings") as any)
     .update(updates)
     .eq("id", true)
     .select()
@@ -61,8 +61,8 @@ export async function getBusinessDays(
   const start = startDate.toISOString().split("T")[0];
   const end = endDate.toISOString().split("T")[0];
 
-  const { data, error } = await supabase
-    .from("business_days")
+  const { data, error } = await (supabase
+    .from("business_days") as any)
     .select("*")
     .gte("day", start)
     .lte("day", end)
@@ -91,8 +91,8 @@ export async function upsertBusinessDay(
   day: string, // YYYY-MM-DD
   status: "open" | "holiday" | "closed"
 ): Promise<BusinessDay> {
-  const { data, error } = await supabase
-    .from("business_days")
+  const { data, error } = await (supabase
+    .from("business_days") as any)
     .upsert(
       {
         day,
@@ -116,7 +116,7 @@ export async function upsertBusinessDay(
  * Delete business day (remove from table)
  */
 export async function deleteBusinessDay(day: string): Promise<void> {
-  const { error } = await supabase.from("business_days").delete().eq("day", day);
+  const { error } = await (supabase.from("business_days") as any).delete().eq("day", day);
 
   if (error) {
     throw new Error(`Failed to delete business day: ${error.message}`);
@@ -129,8 +129,8 @@ export async function deleteBusinessDay(day: string): Promise<void> {
 export async function getBusinessHoursOverride(
   day: string // YYYY-MM-DD
 ): Promise<BusinessHoursOverride | null> {
-  const { data, error } = await supabase
-    .from("business_hours_overrides")
+  const { data, error } = await (supabase
+    .from("business_hours_overrides") as any)
     .select("*")
     .eq("day", day)
     .single();
@@ -155,8 +155,8 @@ export async function getBusinessHoursOverrides(
   const start = startDate.toISOString().split("T")[0];
   const end = endDate.toISOString().split("T")[0];
 
-  const { data, error } = await supabase
-    .from("business_hours_overrides")
+  const { data, error } = await (supabase
+    .from("business_hours_overrides") as any)
     .select("*")
     .gte("day", start)
     .lte("day", end)
@@ -175,8 +175,8 @@ export async function getBusinessHoursOverrides(
 export async function upsertBusinessHoursOverride(
   override: BusinessHoursOverrideInsert
 ): Promise<BusinessHoursOverride> {
-  const { data, error } = await supabase
-    .from("business_hours_overrides")
+  const { data, error } = await (supabase
+    .from("business_hours_overrides") as any)
     .upsert(override, {
       onConflict: "day"
     })
@@ -194,8 +194,8 @@ export async function upsertBusinessHoursOverride(
  * Delete business hours override
  */
 export async function deleteBusinessHoursOverride(day: string): Promise<void> {
-  const { error } = await supabase
-    .from("business_hours_overrides")
+  const { error } = await (supabase
+    .from("business_hours_overrides") as any)
     .delete()
     .eq("day", day);
 

@@ -10,17 +10,17 @@ type CounterUpdate = Database["public"]["Tables"]["customer_action_counters"]["U
  */
 export async function incrementCancelCount(lineUserId: string): Promise<void> {
   // Get or create counter
-  const { data: existing } = await supabase
-    .from("customer_action_counters")
+  const { data: existing } = await (supabase
+    .from("customer_action_counters") as any)
     .select("*")
     .eq("line_user_id", lineUserId)
     .single();
 
   if (existing) {
     // Update existing counter
-    const { error } = await supabase
-      .from("customer_action_counters")
-      .update({ cancel_count: existing.cancel_count + 1 })
+    const { error } = await (supabase
+      .from("customer_action_counters") as any)
+      .update({ cancel_count: (existing as Counter).cancel_count + 1 })
       .eq("line_user_id", lineUserId);
 
     if (error) {
@@ -28,8 +28,8 @@ export async function incrementCancelCount(lineUserId: string): Promise<void> {
     }
   } else {
     // Create new counter
-    const { error } = await supabase
-      .from("customer_action_counters")
+    const { error } = await (supabase
+      .from("customer_action_counters") as any)
       .insert({
         line_user_id: lineUserId,
         cancel_count: 1,
@@ -47,17 +47,17 @@ export async function incrementCancelCount(lineUserId: string): Promise<void> {
  */
 export async function incrementChangeCount(lineUserId: string): Promise<void> {
   // Get or create counter
-  const { data: existing } = await supabase
-    .from("customer_action_counters")
+  const { data: existing } = await (supabase
+    .from("customer_action_counters") as any)
     .select("*")
     .eq("line_user_id", lineUserId)
     .single();
 
   if (existing) {
     // Update existing counter
-    const { error } = await supabase
-      .from("customer_action_counters")
-      .update({ change_count: existing.change_count + 1 })
+    const { error } = await (supabase
+      .from("customer_action_counters") as any)
+      .update({ change_count: (existing as Counter).change_count + 1 })
       .eq("line_user_id", lineUserId);
 
     if (error) {
@@ -65,8 +65,8 @@ export async function incrementChangeCount(lineUserId: string): Promise<void> {
     }
   } else {
     // Create new counter
-    const { error } = await supabase
-      .from("customer_action_counters")
+    const { error } = await (supabase
+      .from("customer_action_counters") as any)
       .insert({
         line_user_id: lineUserId,
         cancel_count: 0,
@@ -83,8 +83,8 @@ export async function incrementChangeCount(lineUserId: string): Promise<void> {
  * Get counter for a LINE user ID
  */
 export async function getCounter(lineUserId: string): Promise<Counter | null> {
-  const { data, error } = await supabase
-    .from("customer_action_counters")
+  const { data, error } = await (supabase
+    .from("customer_action_counters") as any)
     .select("*")
     .eq("line_user_id", lineUserId)
     .single();

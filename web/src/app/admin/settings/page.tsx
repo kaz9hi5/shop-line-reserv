@@ -344,7 +344,7 @@ export default function AdminSettingsPage() {
               {week.map((d) => {
                 const key = formatYmd(d);
                 const value = weekStatus[key] ?? "unset";
-                const hours = weekHours[key] ?? { enabled: false };
+                const hours: DayHoursOverride = weekHours[key] ?? { enabled: false };
                 const showHoursControls = value !== "unset";
                 return (
                   <li
@@ -374,10 +374,10 @@ export default function AdminSettingsPage() {
                               checked={hours.enabled}
                               onChange={(e) => {
                                 const enabled = e.target.checked;
-                                setWeekHours((prev) => ({
+                                setWeekHours((prev: Record<string, DayHoursOverride>) => ({
                                   ...prev,
                                   [key]: enabled
-                                    ? { enabled: true, openTime, closeTime }
+                                    ? { enabled: true, openTime, closeTime, lunchOverrideEnabled: false }
                                     : { enabled: false }
                                 }));
                               }}
@@ -393,7 +393,7 @@ export default function AdminSettingsPage() {
                                   type="time"
                                   value={hours.openTime}
                                   onChange={(e) =>
-                                    setWeekHours((prev) => ({
+                                    setWeekHours((prev: Record<string, DayHoursOverride>) => ({
                                       ...prev,
                                       [key]: {
                                         ...hours,
@@ -409,7 +409,7 @@ export default function AdminSettingsPage() {
                                   type="time"
                                   value={hours.closeTime}
                                   onChange={(e) =>
-                                    setWeekHours((prev) => ({
+                                    setWeekHours((prev: Record<string, DayHoursOverride>) => ({
                                       ...prev,
                                       [key]: {
                                         ...hours,
@@ -429,7 +429,7 @@ export default function AdminSettingsPage() {
                                     checked={hours.lunchOverrideEnabled}
                                     onChange={(e) => {
                                       const enabled = e.target.checked;
-                                      setWeekHours((prev) => ({
+                                      setWeekHours((prev: Record<string, DayHoursOverride>) => ({
                                         ...prev,
                                         [key]: enabled
                                           ? {
@@ -459,7 +459,7 @@ export default function AdminSettingsPage() {
                                       type="time"
                                       value={hours.lunchStart ?? lunchStart}
                                       onChange={(e) =>
-                                        setWeekHours((prev) => ({
+                                        setWeekHours((prev: Record<string, DayHoursOverride>) => ({
                                           ...prev,
                                           [key]: {
                                             ...hours,
@@ -477,7 +477,7 @@ export default function AdminSettingsPage() {
                                       type="time"
                                       value={hours.lunchEnd ?? lunchEnd}
                                       onChange={(e) =>
-                                        setWeekHours((prev) => ({
+                                        setWeekHours((prev: Record<string, DayHoursOverride>) => ({
                                           ...prev,
                                           [key]: {
                                             ...hours,

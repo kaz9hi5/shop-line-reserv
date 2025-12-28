@@ -9,8 +9,8 @@ type TreatmentUpdate = Database["public"]["Tables"]["treatments"]["Update"];
  * Get all active treatments
  */
 export async function getTreatments(): Promise<Treatment[]> {
-  const { data, error } = await supabase
-    .from("treatments")
+  const { data, error } = await (supabase
+    .from("treatments") as any)
     .select("*")
     .is("deleted_at", null)
     .order("sort_order", { ascending: true })
@@ -27,8 +27,8 @@ export async function getTreatments(): Promise<Treatment[]> {
  * Get a single treatment by ID
  */
 export async function getTreatmentById(id: string): Promise<Treatment | null> {
-  const { data, error } = await supabase
-    .from("treatments")
+  const { data, error } = await (supabase
+    .from("treatments") as any)
     .select("*")
     .eq("id", id)
     .is("deleted_at", null)
@@ -48,8 +48,8 @@ export async function getTreatmentById(id: string): Promise<Treatment | null> {
  * Create a new treatment
  */
 export async function createTreatment(treatment: TreatmentInsert): Promise<Treatment> {
-  const { data, error } = await supabase
-    .from("treatments")
+  const { data, error } = await (supabase
+    .from("treatments") as any)
     .insert(treatment)
     .select()
     .single();
@@ -68,8 +68,8 @@ export async function updateTreatment(
   id: string,
   updates: TreatmentUpdate
 ): Promise<Treatment> {
-  const { data, error } = await supabase
-    .from("treatments")
+  const { data, error } = await (supabase
+    .from("treatments") as any)
     .update(updates)
     .eq("id", id)
     .select()
@@ -86,8 +86,8 @@ export async function updateTreatment(
  * Delete a treatment (logical delete)
  */
 export async function deleteTreatment(id: string): Promise<void> {
-  const { error } = await supabase
-    .from("treatments")
+  const { error } = await (supabase
+    .from("treatments") as any)
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", id);
 
