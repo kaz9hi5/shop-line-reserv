@@ -9,12 +9,16 @@ import {
   getAppSettings,
   updateAppSettings,
   getBusinessDays,
+  getBusinessDaysForDate,
   upsertBusinessDay,
   deleteBusinessDay,
   getBusinessHoursOverrides,
   upsertBusinessHoursOverride,
   deleteBusinessHoursOverride
 } from "@/lib/settings";
+import { getActiveStaff, getCurrentStaffId } from "@/lib/staff";
+import type { StaffRow } from "@/lib/staff";
+import type { BusinessDay } from "@/lib/settings";
 
 const SHOP_NAME = "〇〇ネイルサロン";
 
@@ -108,6 +112,9 @@ export default function AdminSettingsPage() {
   const [dayStatus, setDayStatus] = useState<Record<string, DayStatus>>({});
   const [dayHours, setDayHours] = useState<Record<string, DayHoursOverride>>({});
   const [selectedYmd, setSelectedYmd] = useState<string>(() => formatYmd(new Date()));
+  const [staffList, setStaffList] = useState<StaffRow[]>([]);
+  const [selectedDayStaffStatus, setSelectedDayStaffStatus] = useState<BusinessDay[]>([]);
+  const [currentStaffId, setCurrentStaffId] = useState<string | null>(null);
 
   // Load settings
   useEffect(() => {
@@ -116,6 +123,12 @@ export default function AdminSettingsPage() {
     async function loadSettings() {
       try {
         setLoading(true);
+
+        // Get current user's staff ID
+        const staffId = await getCurrentStaffId();
+        if (!cancelled) {
+          setCurrentStaffId(staffId);
+        }
 
         // Load app settings
         const settings = await getAppSettings();
@@ -128,25 +141,25 @@ export default function AdminSettingsPage() {
           setLunchEnd(settings.default_lunch_end || "13:00");
         }
 
-        // Load business days for month
+        // Load business days for month (filter by current user's staff_id)
         const businessDays = await getBusinessDays(monthStart, monthEnd);
         if (!cancelled) {
           const statusMap: Record<string, DayStatus> = {};
           for (const d of monthDays) {
             const ymd = formatYmd(d);
-            const dayData = businessDays.find((bd) => bd.day === ymd);
+            const dayData = businessDays.find((bd) => bd.day === ymd && bd.staff_id === staffId);
             statusMap[ymd] = dayData ? (dayData.status as DayStatus) : "unset";
           }
           setDayStatus(statusMap);
         }
 
-        // Load business hours overrides for month
+        // Load business hours overrides for month (filter by current user's staff_id)
         const overrides = await getBusinessHoursOverrides(monthStart, monthEnd);
         if (!cancelled) {
           const hoursMap: Record<string, DayHoursOverride> = {};
           for (const d of monthDays) {
             const ymd = formatYmd(d);
-            const override = overrides.find((o) => o.day === ymd);
+            const override = overrides.find((o) => o.day === ymd && o.staff_id === staffId);
             if (override) {
               hoursMap[ymd] = {
                 enabled: true,
@@ -161,6 +174,12 @@ export default function AdminSettingsPage() {
             }
           }
           setDayHours(hoursMap);
+        }
+
+        // Load staff list
+        const staff = await getActiveStaff();
+        if (!cancelled) {
+          setStaffList(staff);
         }
       } catch (err) {
         if (!cancelled) {
@@ -181,6 +200,31 @@ export default function AdminSettingsPage() {
     };
   }, [monthStart, monthEnd, monthDays]);
 
+  // Load staff status for selected day
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSelectedDayStaffStatus() {
+      try {
+        const businessDays = await getBusinessDaysForDate(selectedYmd);
+        if (!cancelled) {
+          setSelectedDayStaffStatus(businessDays);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load staff status for selected day:", err);
+          setSelectedDayStaffStatus([]);
+        }
+      }
+    }
+
+    loadSelectedDayStaffStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedYmd]);
+
   const unsetCount = useMemo(
     () => monthDays.filter((d) => (dayStatus[formatYmd(d)] ?? "unset") === "unset").length,
     [monthDays, dayStatus]
@@ -190,6 +234,9 @@ export default function AdminSettingsPage() {
     try {
       setSaving(true);
       setFlash(null);
+
+      // Get current user's staff ID
+      const staffId = await getCurrentStaffId();
 
       // Save app settings
       await updateAppSettings({
@@ -206,9 +253,9 @@ export default function AdminSettingsPage() {
         const ymd = formatYmd(d);
         const status = dayStatus[ymd] || "unset";
         if (status === "unset") {
-          await deleteBusinessDay(ymd);
+          await deleteBusinessDay(ymd, staffId);
         } else {
-          await upsertBusinessDay(ymd, status);
+          await upsertBusinessDay(ymd, status, staffId);
         }
       }
 
@@ -217,7 +264,7 @@ export default function AdminSettingsPage() {
         const ymd = formatYmd(d);
         const hours = dayHours[ymd];
         if (!hours || !hours.enabled) {
-          await deleteBusinessHoursOverride(ymd);
+          await deleteBusinessHoursOverride(ymd, staffId);
         } else {
           await upsertBusinessHoursOverride({
             day: ymd,
@@ -225,7 +272,8 @@ export default function AdminSettingsPage() {
             close_time: hours.closeTime,
             lunch_enabled: hours.lunchOverrideEnabled,
             lunch_start: hours.lunchOverrideEnabled ? hours.lunchStart || null : null,
-            lunch_end: hours.lunchOverrideEnabled ? hours.lunchEnd || null : null
+            lunch_end: hours.lunchOverrideEnabled ? hours.lunchEnd || null : null,
+            staff_id: staffId
           });
         }
       }
@@ -357,7 +405,7 @@ export default function AdminSettingsPage() {
                 className="w-full"
               />
               <div className="w-20 text-right text-sm font-semibold text-slate-800">
-                {deadlineHours}h
+                {deadlineHours}時間前まで
               </div>
             </div>
             <p className="mt-2 text-xs text-slate-500">
@@ -367,7 +415,7 @@ export default function AdminSettingsPage() {
         </div>
 
         <Card
-          title="営業日（1ヶ月カレンダー）"
+          title="営業日カレンダー"
           right={
             <div className="flex items-center gap-2">
               <button
@@ -390,19 +438,16 @@ export default function AdminSettingsPage() {
             </div>
           }
         >
-          <p className="text-sm leading-6 text-slate-600">
-            営業日設定は <span className="font-semibold">日付単位</span>で行います。未設定の日付は予約画面に表示されません。
-          </p>
-
+          <div className="mt-4 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200/70">
+            <span className="text-sm leading-6 text-slate-600">営業日設定は日付単位で行います。</span>
           {unsetCount > 0 ? (
-            <div className="mt-4 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200/70">
-              <p className="text-xs leading-5 text-amber-900">
+              <span className="text-xs leading-5 text-amber-900">
                 この月に未設定の日付が {unsetCount} 件あります（予約画面には表示されません）。
-              </p>
-            </div>
+              </span>
           ) : null}
+          </div>
 
-          <div className="mt-4 grid gap-3">
+          <div className="mt-4 flex flex-col gap-3">
             <div className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200/70">
               <div className="grid grid-cols-7 bg-slate-100/70 px-3 py-2 text-center text-xs font-semibold text-slate-600">
                 {["月", "火", "水", "木", "金", "土", "日"].map((w) => (
@@ -459,18 +504,54 @@ export default function AdminSettingsPage() {
               <div className="text-sm font-semibold text-slate-800">選択日：{selectedYmd}</div>
               <div className="mt-3">
                 <div className="mb-1 text-xs font-semibold text-slate-600">状態</div>
-                <select
-                  value={dayStatus[selectedYmd] ?? "unset"}
-                  onChange={(e) =>
-                    setDayStatus((prev) => ({ ...prev, [selectedYmd]: e.target.value as DayStatus }))
-                  }
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                >
-                  <option value="unset">未設定（非表示）</option>
-                  <option value="open">営業日（予約可）</option>
-                  <option value="holiday">休日（表示/予約不可）</option>
-                  <option value="closed">定休日（表示/予約不可）</option>
-                </select>
+                <div className="flex items-start gap-2">
+                  <select
+                    value={dayStatus[selectedYmd] ?? "unset"}
+                    onChange={(e) =>
+                      setDayStatus((prev) => ({ ...prev, [selectedYmd]: e.target.value as DayStatus }))
+                    }
+                    className="h-10 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                  >
+                    <option value="unset">未設定（非表示）</option>
+                    <option value="open">営業日（予約可）</option>
+                    <option value="holiday">休日（表示/予約不可）</option>
+                    <option value="closed">定休日（表示/予約不可）</option>
+                  </select>
+                  <div className="flex flex-col gap-1 min-w-[120px]">
+                    {staffList.length > 0 ? (
+                      <>
+                        {(() => {
+                          // 営業日（status='open'）を選択している店員のみを表示
+                          const workingStaffIds = new Set(
+                            selectedDayStaffStatus
+                              .filter((bd) => bd.status === "open")
+                              .map((bd) => bd.staff_id)
+                          );
+                          const workingStaff = staffList.filter((s) => workingStaffIds.has(s.id));
+                          
+                          // 操作している店員以外の店員をフィルタリング
+                          const otherWorkingStaff = currentStaffId
+                            ? workingStaff.filter((s) => s.id !== currentStaffId)
+                            : workingStaff;
+                          return (
+                            <>
+                              <div className="rounded-lg bg-emerald-50 px-2 py-1 ring-1 ring-emerald-200/70">
+                                <div className="text-xs font-semibold text-emerald-700">出勤Staff</div>
+                                <div className="mt-0.5 text-xs text-emerald-600">
+                                {otherWorkingStaff.length > 0 ? otherWorkingStaff.map((s) => s.name).join("・") : "---"}
+                                </div>
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </>
+                    ) : (
+                      <div className="rounded-lg bg-slate-50 px-2 py-1 ring-1 ring-slate-200/70">
+                        <div className="text-xs text-slate-400">読み込み中...</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {(dayStatus[selectedYmd] ?? "unset") === "open" ? (

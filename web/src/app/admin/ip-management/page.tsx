@@ -34,7 +34,38 @@ export default function AdminIpManagementPage() {
       try {
         setLoading(true);
         const ipsData = await getAllowedIps();
-        setAllowedIps(ipsData);
+        
+        // 店長のIPアドレスを自動的に店長のstaff_idに紐付ける
+        const staffRows = await getActiveStaff();
+        const managerStaff = staffRows.find((s) => s.role === "manager");
+        
+        if (managerStaff) {
+          const updatedIps = await Promise.all(
+            ipsData.map(async (ipData) => {
+              // role='manager'でstaff_idがnullの場合は自動的に店長のstaff_idを設定
+              if (ipData.role === "manager" && !ipData.staff_id) {
+                try {
+                  await updateTable<AdminAllowedIp>(
+                    "admin_allowed_ips",
+                    {
+                      staff_id: managerStaff.id,
+                      role: "manager"
+                    },
+                    { ip: ipData.ip }
+                  );
+                  return { ...ipData, staff_id: managerStaff.id };
+                } catch (err) {
+                  console.error(`Failed to auto-link manager IP ${ipData.ip}:`, err);
+                  return ipData;
+                }
+              }
+              return ipData;
+            })
+          );
+          setAllowedIps(updatedIps);
+        } else {
+          setAllowedIps(ipsData);
+        }
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         if (errorMsg.includes("Unauthorized")) {
@@ -177,7 +208,7 @@ export default function AdminIpManagementPage() {
           管理画面へのアクセスを許可する IP アドレスを管理します。現在のIPアドレスを確認して、必要に応じて許可リストに追加してください。
         </p>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
+        <div className="mt-4 flex flex-col gap-4">
           <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200/70">
             <div className="text-sm font-semibold text-slate-800">現在のIPアドレス</div>
             <p className="mt-1 text-sm text-slate-600">自動検出されたIPアドレスを表示します。</p>
@@ -204,7 +235,7 @@ export default function AdminIpManagementPage() {
           <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200/70">
             <div className="text-sm font-semibold text-slate-800">許可 IP アドレス管理</div>
             <p className="mt-1 text-sm text-slate-600">
-              管理画面へのアクセスを許可する IP を管理します（削除＝拒否）。
+              管理画面へのアクセスを許可する IP を管理します（削除＝拒否）。店長だけ自動に紐付けます。
             </p>
             <div className="mt-3 space-y-2">
               <ul className="divide-y divide-slate-200/70 overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200/70">
@@ -225,23 +256,38 @@ export default function AdminIpManagementPage() {
                           </div>
                         )}
                         <div className="mt-2">
-                          <div className="text-xs font-semibold text-slate-600">スタッフ紐づけ</div>
+                          <div className="text-xs font-semibold text-slate-600">IPアドレスと名前を紐付け</div>
                           <div className="mt-1">
-                            <select
-                              className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                              value={ipData.staff_id ?? ""}
-                              onChange={(e) => handleUpdateIpStaffLink(ipData.ip, e.target.value)}
-                              disabled={saving || staffList.length === 0}
-                            >
-                              <option value="">未設定</option>
-                              {staffList.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                  {s.role === "manager" ? "店長" : "店員"}: {s.name}
-                                </option>
-                              ))}
-                            </select>
+                            {ipData.role === "manager" ? (
+                              // 店長の場合は自動紐付けで編集不可
+                              <div className="h-10 flex items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-600">
+                                {ipData.staff_id ? (
+                                  staffList.find((s) => s.id === ipData.staff_id) ? (
+                                    `店長: ${staffList.find((s) => s.id === ipData.staff_id)?.name}`
+                                  ) : (
+                                    "店長: 自動紐付け済み"
+                                  )
+                                ) : (
+                                  "店長: 自動紐付け中..."
+                                )}
+                              </div>
+                            ) : (
+                              <select
+                                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                                value={ipData.staff_id ?? ""}
+                                onChange={(e) => handleUpdateIpStaffLink(ipData.ip, e.target.value)}
+                                disabled={saving || staffList.length === 0}
+                              >
+                                <option value="">未設定</option>
+                                {staffList.map((s) => (
+                                  <option key={s.id} value={s.id}>
+                                    {s.role === "manager" ? "店長" : "店員"}: {s.name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
-                          {staffList.length === 0 ? (
+                          {ipData.role !== "manager" && staffList.length === 0 ? (
                             <div className="mt-1 text-xs text-slate-500">スタッフ一覧を取得できませんでした</div>
                           ) : null}
                         </div>

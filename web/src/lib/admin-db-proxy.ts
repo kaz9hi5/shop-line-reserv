@@ -29,13 +29,18 @@ type DbProxyResponse<T = any> = {
  * This function handles device fingerprinting and role-based access control
  */
 async function callAdminDbProxy<T = any>(request: DbProxyRequest): Promise<DbProxyResponse<T>> {
+  console.log("[callAdminDbProxy] Called with request:", request);
   try {
+    console.log("[callAdminDbProxy] Invoking supabase.functions.invoke");
     const { data, error } = await supabase.functions.invoke("admin-db-proxy", {
       body: request
     });
 
+    console.log("[callAdminDbProxy] Response:", { data, error });
+
     // If there's an error from the invoke call itself (network error, etc.)
     if (error) {
+      console.error("[callAdminDbProxy] Invoke error:", error);
       return {
         ok: false,
         error: error.message || "Failed to call admin-db-proxy",
@@ -45,6 +50,7 @@ async function callAdminDbProxy<T = any>(request: DbProxyRequest): Promise<DbPro
 
     // Check if the response indicates an error (even if HTTP status was 2xx)
     if (data && typeof data === 'object' && 'ok' in data && !data.ok) {
+      console.error("[callAdminDbProxy] Response indicates error:", data);
       return {
         ok: false,
         error: data.error || "Edge Function returned an error",
@@ -52,8 +58,10 @@ async function callAdminDbProxy<T = any>(request: DbProxyRequest): Promise<DbPro
       };
     }
 
+    console.log("[callAdminDbProxy] Success, returning data");
     return data as DbProxyResponse<T>;
   } catch (e) {
+    console.error("[callAdminDbProxy] Exception:", e);
     return {
       ok: false,
       error: e instanceof Error ? e.message : "Unknown error occurred",
@@ -94,13 +102,17 @@ export async function insertIntoTable<T = any>(
   table: string,
   data: Record<string, any>
 ): Promise<T> {
+  console.log("[insertIntoTable] Called", { table, data });
   const response = await callAdminDbProxy<T>({
     operation: "insert",
     table,
     data
   });
 
+  console.log("[insertIntoTable] Response:", response);
+
   if (!response.ok || !response.data) {
+    console.error("[insertIntoTable] Error response:", response);
     throw new Error(response.error || "Failed to insert data");
   }
 

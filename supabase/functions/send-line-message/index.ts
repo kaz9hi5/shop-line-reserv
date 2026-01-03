@@ -24,8 +24,24 @@ Deno.serve(async (req) => {
       });
     }
 
-    const payload = (await req.json()) as Partial<RequestBody>;
-    const reservationId = payload.reservation_id?.trim();
+    // Support multiple webhook shapes:
+    // - Custom JSON body: { "reservation_id": "..." }
+    // - Supabase Database Webhooks default body: { record: { id: "..." }, ... }
+    // - URL query param: ?reservation_id=...
+    const url = new URL(req.url);
+    const reservationIdFromQuery = url.searchParams.get("reservation_id")?.trim();
+
+    const payload = (await req.json()) as Partial<RequestBody> & {
+      record?: { id?: string };
+      new?: { id?: string }; // some systems use "new"
+    };
+
+    const reservationId =
+      payload.reservation_id?.trim() ||
+      payload.record?.id?.trim() ||
+      payload.new?.id?.trim() ||
+      reservationIdFromQuery;
+
     const to = payload.to?.trim();
     const messages = payload.messages;
 
@@ -45,7 +61,7 @@ Deno.serve(async (req) => {
         .from("reservations")
         .select(`
           id,
-          customer_name,
+          user_name,
           line_user_id,
           start_at,
           treatment_name_snapshot,
@@ -72,7 +88,7 @@ Deno.serve(async (req) => {
       const lineMessages = [
         {
           type: "text" as const,
-          text: `【予約確定】\n${reservation.customer_name}様\n\n予約日時: ${dateStr} ${timeStr}\n施術内容: ${reservation.treatment_name_snapshot}\n施術時間: ${reservation.treatment_duration_minutes_snapshot}分\n価格: ¥${reservation.treatment_price_yen_snapshot.toLocaleString("ja-JP")}`
+          text: `【予約確定】\n${reservation.user_name}様\n\n予約日時: ${dateStr} ${timeStr}\n施術内容: ${reservation.treatment_name_snapshot}\n施術時間: ${reservation.treatment_duration_minutes_snapshot}分\n価格: ¥${reservation.treatment_price_yen_snapshot.toLocaleString("ja-JP")}`
         },
         {
           type: "template" as const,

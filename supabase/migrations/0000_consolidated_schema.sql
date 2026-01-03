@@ -1,6 +1,6 @@
 -- Consolidated schema for shop-line-reserv
 -- This file consolidates all migrations into a single schema definition
--- Latest structure as of migration 0008
+-- Latest structure as of migration 0001 (includes line_users table)
 
 begin;
 
@@ -139,10 +139,10 @@ create table if not exists public.reservations (
   updated_at timestamptz not null default now(),
   deleted_at timestamptz,
 
-  -- customer identity (LINE-based)
+  -- user identity (LINE-based)
   line_user_id text not null,
   line_display_name text,
-  customer_name text not null,
+  user_name text not null,
 
   -- menu
   treatment_id uuid references public.treatments (id),
@@ -185,7 +185,38 @@ end $$;
 
 
 -- =========================================================
--- Customer action counters (per LINE user ID)
+-- LINE Users table (お友達登録情報)
+-- =========================================================
+create table if not exists public.line_users (
+  line_user_id text primary key,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  
+  -- LINE user information
+  line_display_name text,
+  name text,
+  
+  -- Profile information (can be updated via LINE API)
+  picture_url text,
+  
+  -- Status
+  is_friend boolean not null default true, -- false when user blocks/unfriends
+  unfriended_at timestamptz
+);
+
+create index if not exists idx_line_users_is_friend on public.line_users (is_friend);
+create index if not exists idx_line_users_created_at on public.line_users (created_at);
+
+comment on table public.line_users is 'LINE users who have added the bot as a friend';
+comment on column public.line_users.line_user_id is 'LINE user ID (primary key)';
+comment on column public.line_users.line_display_name is 'LINE display name';
+comment on column public.line_users.name is 'User name (can be set manually or from LINE profile)';
+comment on column public.line_users.is_friend is 'Whether the user is still a friend (false when blocked/unfriended)';
+comment on column public.line_users.unfriended_at is 'Timestamp when user unfriended/blocked';
+
+-- =========================================================
+-- User action counters (per LINE user ID)
+-- Note: Table name kept as customer_action_counters for backward compatibility
 -- =========================================================
 create table if not exists public.customer_action_counters (
   line_user_id text primary key,
@@ -400,6 +431,11 @@ before insert or update of treatment_id, start_at
 on public.reservations
 for each row execute function public.reservations_apply_treatment_snapshot();
 
+drop trigger if exists trg_line_users_updated_at on public.line_users;
+create trigger trg_line_users_updated_at
+before update on public.line_users
+for each row execute function public.set_updated_at();
+
 drop trigger if exists trg_customer_action_counters_updated_at on public.customer_action_counters;
 create trigger trg_customer_action_counters_updated_at
 before update on public.customer_action_counters
@@ -417,6 +453,7 @@ alter table public.business_days enable row level security;
 alter table public.business_hours_overrides enable row level security;
 alter table public.reservations enable row level security;
 alter table public.customer_action_counters enable row level security;
+alter table public.line_users enable row level security;
 
 -- =========================================================
 -- RLS Policies
@@ -607,6 +644,29 @@ create policy "Allow delete staff"
   on public.staff
   for delete
   using (true); -- Edge Function will enforce manager-only access
+
+-- RLS policies for line_users
+-- Allow read access (for admin and staff)
+drop policy if exists "Allow read line_users" on public.line_users;
+create policy "Allow read line_users"
+  on public.line_users
+  for select
+  using (true); -- Edge Function will enforce role-based access
+
+-- Allow insert (for webhook)
+drop policy if exists "Allow insert line_users" on public.line_users;
+create policy "Allow insert line_users"
+  on public.line_users
+  for insert
+  with check (true); -- Edge Function will enforce access
+
+-- Allow update (for webhook and admin)
+drop policy if exists "Allow update line_users" on public.line_users;
+create policy "Allow update line_users"
+  on public.line_users
+  for update
+  using (true)
+  with check (true); -- Edge Function will enforce access
 
 commit;
 

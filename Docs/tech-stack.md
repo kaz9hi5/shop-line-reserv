@@ -6,7 +6,11 @@
 
 ```
 [LINEアプリ]
-   ↓（LINE Login）
+   ↓（お友達登録）
+[LINE Webhook]
+   ↓（ユーザー情報保存）
+[Supabase DB (line_users)]
+   ↓
 [Web予約画面]
    ↓（直接CRUD）
 [Supabase DB]
@@ -19,13 +23,16 @@
 ### 各コンポーネントの説明
 
 - **LINE アプリ**: 顧客の予約エントリーポイント
-  - LINE Login で認証
+  - LINE お友達登録でユーザー情報を取得
   - LINE メッセージで予約通知を受信
+- **LINE Webhook**: LINE お友達登録イベントを受信
+  - お友達登録時に`line_users`テーブルにユーザー情報を自動保存
+  - お友達解除時に`is_friend`フラグを更新
 - **Web 予約画面**: フロントエンド（顧客向け・管理画面）
-  - LINE Login で認証済みのユーザーが予約操作を実行
+  - LINE お友達登録済みユーザーが予約操作を実行
   - 管理画面のデータベース操作は Edge Function `admin-db-proxy` 経由で実行（端末情報による権限チェック）
-- **Supabase DB**: データベース（予約情報、顧客情報の保存）
-  - 全 8 テーブルを使用（`app_settings`, `admin_allowed_ips`, `staff`, `treatments`, `business_days`, `business_hours_overrides`, `reservations`, `customer_action_counters`）
+- **Supabase DB**: データベース（予約情報、ユーザー情報の保存）
+  - 全 9 テーブルを使用（`app_settings`, `admin_allowed_ips`, `staff`, `treatments`, `business_days`, `business_hours_overrides`, `reservations`, `customer_action_counters`, `line_users`）
   - 予約情報（`reservations`）は論理削除で管理
   - 店員情報（`staff`）は論理削除で管理（メンバー編集の削除＝論理削除）
   - その他のテーブルは物理削除で管理
@@ -34,6 +41,7 @@
 - **Supabase Edge Function**: サーバーレス関数
   - `send-line-message`: DB 保存後に自動的にトリガーされ、LINE メッセージ通知を送信
   - `admin-db-proxy`: 管理画面のデータベース操作を代理実行し、端末情報に基づく権限チェックを実施
+  - `line-webhook`: LINE Webhook イベントを受信し、お友達登録・解除時に`line_users`テーブルを更新
 - **LINE Messaging API**: LINE メッセージ送信サービス
 
 ## フロントエンド
@@ -57,6 +65,12 @@
   - JavaScript に型システムを追加した言語
   - 型安全性により、開発時のエラーを早期発見可能
   - Supabase の型定義を活用して、データベーススキーマとの整合性を保証
+
+### 開発時の注意（このリポジトリの構成）
+
+- **コマンド実行ディレクトリ**:
+  - フロントエンドは `web/` 配下に `package.json` があり、`yarn` / `npm` は **`web/` で実行**します
+  - プロジェクトルート（`shop-line-reserv/`）には `package.json` が無いため、ルートで `yarn build` 等を実行するとエラーになります
 
 ### Supabase 公式クライアントライブラリ
 
@@ -243,6 +257,15 @@ const { data, error } = await supabase
   - **IP アドレス制限機能**: 管理画面へのアクセスを特定 IP アドレスに制限
   - **Row Level Security (RLS)**: データベースレベルでのアクセス制御
 
+### Edge Functions（Deno）とエディタ設定
+
+Supabase Edge Functions は **Deno** で動作し、`https://esm.sh/...` のようなリモート import を使います。
+エディタが Node/TypeScript として解釈すると `TS2307`（モジュール/型宣言が見つからない）が出るため、
+このリポジトリでは以下を追加して **`supabase/functions` を Deno として解析**するようにしています。
+
+- `.vscode/settings.json`（`deno.enablePaths` に `supabase/functions` を指定）
+- `supabase/functions/deno.json`（Deno 用 compilerOptions）
+
 ### リポジトリ内のバックエンド資産
 
 詳細は [`supabase/README.md`](../../supabase/README.md) を参照してください。
@@ -266,6 +289,8 @@ supabase/
 │   │   └── index.ts             # メイン処理
 │   ├── admin-db-proxy/          # 管理画面データベース操作プロキシ Edge Function
 │   │   └── index.ts             # メイン処理（端末情報による権限チェック）
+│   ├── line-webhook/            # LINE Webhook 受信 Edge Function
+│   │   └── index.ts             # お友達登録・解除イベント処理
 ├── config.toml                   # Supabase CLI 設定（ローカル開発用）
 └── README.md                    # Supabase 構成の詳細ドキュメント
 ```
@@ -317,7 +342,7 @@ supabase/
 
 7. **`reservations`** - 予約情報
 
-   - 顧客情報（名前、LINE ユーザー ID、LINE 表示名）
+   - ユーザー情報（名前、LINE ユーザー ID、LINE 表示名）
    - 施術情報（スナップショット保存）
    - 予約日時（`start_at`, `end_at`）
    - 予約経路（web/phone/admin）
@@ -325,11 +350,19 @@ supabase/
    - 論理削除対応（`deleted_at`カラムあり）
    - 重複予約防止制約（`reservations_no_overlap_active`）
 
-8. **`customer_action_counters`** - 顧客アクション回数（LINE ユーザー ID 単位）
+8. **`customer_action_counters`** - ユーザーアクション回数（LINE ユーザー ID 単位）
+
    - LINE ユーザー ID（主キー）
    - 予約キャンセル回数、予約変更回数を保持
    - **予約変更フローで発生する「既存予約の論理削除」はキャンセル回数にカウントしない**（変更回数のみ +1）
    - 来店確認時に物理削除（レコードを削除）
+
+9. **`line_users`** - LINE ユーザー情報（お友達登録情報）
+   - LINE ユーザー ID（主キー）
+   - LINE 表示名、名前、プロフィール画像 URL
+   - お友達状態（`is_friend`フラグ）
+   - お友達解除日時（`unfriended_at`）
+   - LINE Webhook を通じて自動保存
 
 **テーブルの削除方式：**
 
@@ -338,12 +371,12 @@ supabase/
   - 削除時は`deleted_at`にタイムスタンプを設定
   - データは物理的には残り、履歴として保持可能
 
-- **物理削除テーブル**（`deleted_at`カラムなし）: `app_settings`、`admin_allowed_ips`、`treatments`、`business_days`、`business_hours_overrides`、`customer_action_counters`
+- **物理削除テーブル**（`deleted_at`カラムなし）: `app_settings`、`admin_allowed_ips`、`treatments`、`business_days`、`business_hours_overrides`、`customer_action_counters`、`line_users`
   - 削除時はデータベースから完全に削除
   - Edge Function 経由で操作する際、`deleted_at`を参照しないように自動的にフィルタリング
   - `customer_action_counters`は来店確認時に物理削除される
 
-**現在使用中のテーブル一覧（全 8 テーブル）:**
+**現在使用中のテーブル一覧（全 9 テーブル）:**
 
 1. `app_settings` - アプリケーション設定
 2. `admin_allowed_ips` - 管理画面アクセス許可 IP（ホワイトリスト、ロール・デバイスフィンガープリント）
@@ -352,7 +385,8 @@ supabase/
 5. `business_days` - 営業日設定（店員 ID で紐付け）
 6. `business_hours_overrides` - 日毎の営業時間上書き（店員 ID で紐付け）
 7. `reservations` - 予約情報（LINE ユーザー ID ベース、論理削除）
-8. `customer_action_counters` - 顧客アクション回数（LINE ユーザー ID 単位、来店確認時に物理削除）
+8. `customer_action_counters` - ユーザーアクション回数（LINE ユーザー ID 単位、来店確認時に物理削除）
+9. `line_users` - LINE ユーザー情報（お友達登録情報、LINE Webhook で自動保存）
 
 **主な機能：**
 
@@ -513,16 +547,15 @@ supabase/
   - 予約キャンセル完了通知の送信
   - メッセージ内に予約変更・キャンセル操作ボタンを含める
 
-- **LINE Login**
-
-  - 顧客の認証
-  - LINE ユーザー ID の取得
-  - LINE 表示名の取得
-
 - **LINE Webhook**
+
+  - LINE お友達登録イベント（`follow`）の受信
+  - LINE お友達解除イベント（`unfollow`）の受信
   - LINE メッセージイベントの受信
   - ポストバックイベント（ボタン操作）の受信
   - 署名検証によるセキュリティ確保
+  - お友達登録時に`line_users`テーブルにユーザー情報を自動保存
+  - LINE Profile API を使用してユーザーの表示名・プロフィール画像を取得
 
 ### 予約キャンセルの処理フロー
 
