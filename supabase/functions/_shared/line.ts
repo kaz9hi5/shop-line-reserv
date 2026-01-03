@@ -48,8 +48,19 @@ export async function sendLineMessage({ to, messages }: LineSendMessageParams) {
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`LINE API error: ${res.status} ${res.statusText} ${text}`);
+    const contentType = res.headers.get("content-type") || "";
+    const raw = await res.text().catch(() => "");
+    let details: unknown = raw;
+    if (contentType.includes("application/json")) {
+      try {
+        details = JSON.parse(raw);
+      } catch {
+        // keep raw
+      }
+    }
+    // Include "to" so we can diagnose invalid user IDs quickly (not secret; but still treat as PII in logs).
+    console.error("LINE API error", { status: res.status, statusText: res.statusText, to, details });
+    throw new Error(`LINE API error: ${res.status} ${res.statusText} ${raw}`);
   }
 
   return await res.json();

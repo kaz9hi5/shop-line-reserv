@@ -1,5 +1,6 @@
 import type { Database } from "./database.types";
 import { callRpc, deleteFromTable, insertIntoTable, selectFromTable, updateTable } from "./admin-db-proxy";
+import { getClientIp } from "./ip-detection";
 
 export type StaffRow = Database["public"]["Tables"]["staff"]["Row"];
 export type StaffInsert = Database["public"]["Tables"]["staff"]["Insert"];
@@ -52,6 +53,122 @@ export async function gateAddAllowedIp(params: {
     p_device_fingerprint: params.deviceFingerprint
   });
   return ok === true;
+}
+
+/**
+ * Get current user's staff ID
+ * For manager: returns manager's staff ID from staff table
+ * For staff: returns staff_id from admin_allowed_ips (if linked) or throws error
+ */
+export async function getCurrentStaffId(): Promise<string> {
+  // First, get current role
+  const { getCurrentRole } = await import("./admin-db-proxy");
+  const role = await getCurrentRole();
+
+  if (role === "unauthorized") {
+    throw new Error("Unauthorized access");
+  }
+
+  if (role === "manager") {
+    // For manager, get manager's staff ID from staff table
+    const managers = await selectFromTable<StaffRow>("staff", {
+      where: { role: "manager", deleted_at: null },
+      limit: 1
+    });
+    if (!managers || managers.length === 0) {
+      throw new Error("Manager staff record not found");
+    }
+    return managers[0].id;
+  }
+
+  // For staff, get staff_id from admin_allowed_ips using current IP
+  const { getClientIp } = await import("./ip-detection");
+  const currentIp = await getClientIp();
+  
+  type AdminAllowedIp = Database["public"]["Tables"]["admin_allowed_ips"]["Row"];
+  const allowedIps = await selectFromTable<AdminAllowedIp>("admin_allowed_ips", {
+    where: { ip: currentIp },
+    limit: 1
+  });
+  
+  if (!allowedIps || allowedIps.length === 0) {
+    throw new Error("Current IP not found in allowed IPs list");
+  }
+  
+  const allowedIp = allowedIps[0];
+  
+  // If staff_id is linked, use it
+  if (allowedIp.staff_id) {
+    return allowedIp.staff_id;
+  }
+  
+  // If staff_id is not linked, get first staff record as fallback
+  // Note: This is a fallback. Ideally, staff_id should be linked in admin_allowed_ips
+  const staffRecords = await selectFromTable<StaffRow>("staff", {
+    where: { role: "staff", deleted_at: null },
+    order: { column: "created_at", ascending: true },
+    limit: 1
+  });
+  
+  if (!staffRecords || staffRecords.length === 0) {
+    throw new Error("Staff record not found. Please link your IP to a staff member in IP management.");
+  }
+  
+  return staffRecords[0].id;
+}
+
+/**
+ * Get current user's staff information (including name) linked from admin_allowed_ips
+ * Returns null if staff_id is not linked in admin_allowed_ips or staff record not found
+ * This function specifically checks the staff linked via admin_allowed_ips.staff_id
+ */
+export async function getCurrentStaffInfo(): Promise<StaffRow | null> {
+  try {
+    // First, get current role
+    const { getCurrentRole } = await import("./admin-db-proxy");
+    const role = await getCurrentRole();
+
+    if (role === "unauthorized") {
+      return null;
+    }
+
+    // Get current IP
+    const { getClientIp } = await import("./ip-detection");
+    const currentIp = await getClientIp();
+    
+    // Get admin_allowed_ips record for current IP
+    type AdminAllowedIp = Database["public"]["Tables"]["admin_allowed_ips"]["Row"];
+    const allowedIps = await selectFromTable<AdminAllowedIp>("admin_allowed_ips", {
+      where: { ip: currentIp },
+      limit: 1
+    });
+    
+    if (!allowedIps || allowedIps.length === 0) {
+      return null;
+    }
+    
+    const allowedIp = allowedIps[0];
+    
+    // If staff_id is not linked in admin_allowed_ips, return null
+    if (!allowedIp.staff_id) {
+      return null;
+    }
+    
+    // Get staff record linked via admin_allowed_ips.staff_id
+    const staffRecords = await selectFromTable<StaffRow>("staff", {
+      where: { id: allowedIp.staff_id, deleted_at: null },
+      limit: 1
+    });
+    
+    if (!staffRecords || staffRecords.length === 0) {
+      return null;
+    }
+    
+    return staffRecords[0];
+  } catch (error) {
+    console.error("Failed to get current staff info:", error);
+    return null;
+  }
 }
 
 

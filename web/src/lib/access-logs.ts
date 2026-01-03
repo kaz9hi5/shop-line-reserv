@@ -22,7 +22,7 @@ export async function getAllowedIps(): Promise<AdminAllowedIp[]> {
 /**
  * Add allowed IP (via Edge Function)
  */
-export async function addAllowedIp(ip: string, role: "manager" | "staff" = "manager", deviceFingerprint?: string): Promise<AdminAllowedIp> {
+export async function addAllowedIp(ip: string, deviceFingerprint?: string): Promise<AdminAllowedIp> {
   try {
     // Check if IP already exists
     const existing = await selectFromTable<AdminAllowedIp>("admin_allowed_ips", {
@@ -38,7 +38,6 @@ export async function addAllowedIp(ip: string, role: "manager" | "staff" = "mana
     // Create new
     const newRecord = await insertIntoTable<AdminAllowedIp>("admin_allowed_ips", {
       ip,
-      role,
       device_fingerprint: deviceFingerprint || null,
     });
 

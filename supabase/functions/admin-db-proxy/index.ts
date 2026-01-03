@@ -94,9 +94,10 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Check device role from admin_allowed_ips table
+    // Role is determined from staff.role when staff_id is linked
     const { data: allowedIp, error: ipError } = await supabase
       .from("admin_allowed_ips")
-      .select("role, device_fingerprint")
+      .select("device_fingerprint, staff_id")
       // IMPORTANT: Access is IP-allowlist based (fingerprint is stored/updated but does not grant access).
       .eq("ip", clientIp)
       .maybeSingle();
@@ -105,10 +106,22 @@ Deno.serve(async (req) => {
       console.error("Error checking allowed IP:", ipError);
     }
 
-    // Role is sourced from admin_allowed_ips.role
+    // Role is sourced from staff.role when staff_id is linked
     let role: string | null = null;
-    if (allowedIp?.role) {
-      role = allowedIp.role;
+    if (allowedIp?.staff_id) {
+      // Get role from staff table
+      const { data: staff, error: staffError } = await supabase
+        .from("staff")
+        .select("role")
+        .eq("id", allowedIp.staff_id)
+        .is("deleted_at", null)
+        .maybeSingle();
+      
+      if (staffError) {
+        console.error("Error checking staff role:", staffError);
+      } else if (staff?.role) {
+        role = staff.role;
+      }
     }
     
     const isManager = role === "manager";

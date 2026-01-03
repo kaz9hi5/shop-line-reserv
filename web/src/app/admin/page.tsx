@@ -223,15 +223,20 @@ export default function AdminPage() {
           initialTime={create.time}
           onClose={() => setCreate(null)}
           onSubmit={async (r, treatmentId, lineUserId) => {
+            console.log("[AdminPage] onSubmit called", { r, treatmentId, lineUserId });
             try {
+              console.log("[AdminPage] Calling createReservationFromAdmin");
               await createReservationFromAdmin(r, treatmentId, lineUserId);
+              console.log("[AdminPage] createReservationFromAdmin completed");
               // Reload reservations
               const data = await getAdminReservationsByDate(currentDate);
               setReservations(data);
               setFlash("予約を保存しました（LINEメッセージ送信：仮）");
               setCreate(null);
             } catch (err) {
-              setFlash(`エラー: ${err instanceof Error ? err.message : "予約の作成に失敗しました"}`);
+              console.error("[AdminPage] onSubmit error:", err);
+              // エラーを再スローしてモーダル側のエラーハンドリングに任せる
+              throw err;
             }
           }}
         />
@@ -245,17 +250,13 @@ export default function AdminPage() {
           initialReservation={edit}
           onClose={() => setEdit(null)}
           onSubmit={async (r, treatmentId, lineUserId) => {
-            try {
-              // 変更は「旧予約を論理削除→新規作成」の扱い（キャンセル回数は増やさない）
-              await changeReservation(edit.id, r, treatmentId, lineUserId || edit.lineUserId || "");
-              // Reload reservations
-              const data = await getAdminReservationsByDate(currentDate);
-              setReservations(data);
-              setFlash("変更を保存しました（LINEメッセージ送信：仮 / 変更回数+1：仮 / キャンセル回数は増えません）");
-              setEdit(null);
-            } catch (err) {
-              setFlash(`エラー: ${err instanceof Error ? err.message : "予約の変更に失敗しました"}`);
-            }
+            // 変更は「旧予約を論理削除→新規作成」の扱い（キャンセル回数は増やさない）
+            await changeReservation(edit.id, r, treatmentId, lineUserId || edit.lineUserId || "");
+            // Reload reservations
+            const data = await getAdminReservationsByDate(currentDate);
+            setReservations(data);
+            setFlash("変更を保存しました（LINEメッセージ送信：仮 / 変更回数+1：仮 / キャンセル回数は増えません）");
+            setEdit(null);
           }}
         />
       ) : null}

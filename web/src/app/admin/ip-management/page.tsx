@@ -122,16 +122,12 @@ export default function AdminIpManagementPage() {
 
   const handleUpdateIpStaffLink = async (ip: string, staffIdOrEmpty: string) => {
     const staffId = staffIdOrEmpty ? staffIdOrEmpty : null;
-    const staff = staffId ? staffList.find((s) => s.id === staffId) : null;
-    const nextRole: "manager" | "staff" | null = staff ? staff.role : null;
     try {
       setSaving(true);
       await updateTable<AdminAllowedIp>(
         "admin_allowed_ips",
         {
-          staff_id: staffId,
-          // Keep role in sync with staff.role when linked
-          ...(nextRole ? { role: nextRole } : {})
+          staff_id: staffId
         },
         { ip }
       );
@@ -177,7 +173,7 @@ export default function AdminIpManagementPage() {
           管理画面へのアクセスを許可する IP アドレスを管理します。現在のIPアドレスを確認して、必要に応じて許可リストに追加してください。
         </p>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1fr]">
+        <div className="mt-4 flex flex-col gap-4">
           <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200/70">
             <div className="text-sm font-semibold text-slate-800">現在のIPアドレス</div>
             <p className="mt-1 text-sm text-slate-600">自動検出されたIPアドレスを表示します。</p>
@@ -219,13 +215,16 @@ export default function AdminIpManagementPage() {
                     <li key={ipData.ip} className="flex items-center justify-between gap-3 px-3 py-3">
                       <div className="flex-1">
                         <div className="text-sm font-medium text-slate-800">{ipData.ip}</div>
-                        {ipData.role && (
-                          <div className="text-xs text-slate-500">
-                            {ipData.role === "manager" ? "店長" : "店員"}
-                          </div>
-                        )}
+                        {ipData.staff_id && (() => {
+                          const staff = staffList.find((s) => s.id === ipData.staff_id);
+                          return staff ? (
+                            <div className="text-xs text-slate-500">
+                              {staff.role === "manager" ? "店長" : "店員"}
+                            </div>
+                          ) : null;
+                        })()}
                         <div className="mt-2">
-                          <div className="text-xs font-semibold text-slate-600">スタッフ紐づけ</div>
+                          <div className="text-xs font-semibold text-slate-600">IPアドレスと名前を紐付け</div>
                           <div className="mt-1">
                             <select
                               className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"

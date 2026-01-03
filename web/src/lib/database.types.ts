@@ -52,7 +52,6 @@ export interface Database {
           ip: string;
           created_at: string;
           updated_at: string;
-          role: "manager" | "staff" | null;
           device_fingerprint: string | null;
           staff_id: string | null;
         };
@@ -60,7 +59,6 @@ export interface Database {
           ip: string;
           created_at?: string;
           updated_at?: string;
-          role?: "manager" | "staff" | null;
           device_fingerprint?: string | null;
           staff_id?: string | null;
         };
@@ -68,7 +66,6 @@ export interface Database {
           ip?: string;
           created_at?: string;
           updated_at?: string;
-          role?: "manager" | "staff" | null;
           device_fingerprint?: string | null;
           staff_id?: string | null;
         };
@@ -189,13 +186,45 @@ export interface Database {
           staff_id?: string | null;
         };
       };
+      line_users: {
+        Row: {
+          line_user_id: string;
+          created_at: string;
+          updated_at: string;
+          line_display_name: string | null;
+          name: string | null;
+          picture_url: string | null;
+          is_friend: boolean;
+          unfriended_at: string | null;
+        };
+        Insert: {
+          line_user_id: string;
+          created_at?: string;
+          updated_at?: string;
+          line_display_name?: string | null;
+          name?: string | null;
+          picture_url?: string | null;
+          is_friend?: boolean;
+          unfriended_at?: string | null;
+        };
+        Update: {
+          line_user_id?: string;
+          created_at?: string;
+          updated_at?: string;
+          line_display_name?: string | null;
+          name?: string | null;
+          picture_url?: string | null;
+          is_friend?: boolean;
+          unfriended_at?: string | null;
+        };
+      };
       reservations: {
         Row: {
           id: string;
           created_at: string;
           updated_at: string;
           deleted_at: string | null;
-          customer_name: string;
+          user_name: string;
           line_user_id: string;
           line_display_name: string | null;
           treatment_id: string | null;
@@ -212,7 +241,7 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
           deleted_at?: string | null;
-          customer_name: string;
+          user_name: string;
           line_user_id: string;
           line_display_name?: string | null;
           treatment_id: string;
@@ -225,7 +254,7 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
           deleted_at?: string | null;
-          customer_name?: string;
+          user_name?: string;
           line_user_id?: string;
           line_display_name?: string | null;
           treatment_id?: string;

@@ -104,8 +104,8 @@ export default function AdminMembersPage() {
               <thead>
                 <tr className="text-xs font-semibold text-slate-600">
                   <th className="border-b border-slate-200 px-2 py-2" align="left">名前</th>
-                  <th className="border-b border-slate-100 px-2 py-2" align="left">　　ロール</th>
-                  <th className="border-b border-slate-100 px-2 py-2" align="left">　　操作</th>
+                  <th className="border-b border-slate-100 px-2 py-2" align="left">&nbsp;&nbsp;ロール</th>
+                  <th className="border-b border-slate-100 px-2 py-2" align="left">&nbsp;&nbsp;&nbsp;操作</th>
                 </tr>
               </thead>
               <tbody>

@@ -4,7 +4,7 @@ import { selectFromTable, insertIntoTable, updateTable, deleteFromTable } from "
 
 type AppSettings = Database["public"]["Tables"]["app_settings"]["Row"];
 type AppSettingsUpdate = Database["public"]["Tables"]["app_settings"]["Update"];
-type BusinessDay = Database["public"]["Tables"]["business_days"]["Row"];
+export type BusinessDay = Database["public"]["Tables"]["business_days"]["Row"];
 type BusinessDayInsert = Database["public"]["Tables"]["business_days"]["Insert"];
 type BusinessDayUpdate = Database["public"]["Tables"]["business_days"]["Update"];
 type BusinessHoursOverride = Database["public"]["Tables"]["business_hours_overrides"]["Row"];
@@ -80,26 +80,42 @@ export async function getBusinessDaysForWeek(weekStart: Date): Promise<BusinessD
 }
 
 /**
+ * Get business days for a specific date (returns all staff entries for that day)
+ */
+export async function getBusinessDaysForDate(day: string): Promise<BusinessDay[]> {
+  try {
+    const data = await selectFromTable<BusinessDay>("business_days", {
+      where: { day },
+      order: { column: "created_at", ascending: true }
+    });
+    return data || [];
+  } catch (error) {
+    throw new Error(`Failed to fetch business days for date: ${error instanceof Error ? error.message : "Unknown error"}`);
+  }
+}
+
+/**
  * Upsert business day (insert or update via Edge Function)
  */
 export async function upsertBusinessDay(
   day: string, // YYYY-MM-DD
-  status: "open" | "holiday" | "closed"
+  status: "open" | "holiday" | "closed",
+  staffId: string // Staff ID (required)
 ): Promise<BusinessDay> {
   try {
-    // Check if exists
+    // Check if exists for this staff_id
     const existing = await selectFromTable<BusinessDay>("business_days", {
-      where: { day },
+      where: { day, staff_id: staffId },
       limit: 1
     });
 
     if (existing && existing.length > 0) {
       // Update existing
-      const updated = await updateTable<BusinessDay>("business_days", { status }, { day });
+      const updated = await updateTable<BusinessDay>("business_days", { status }, { day, staff_id: staffId });
       return updated[0];
     } else {
       // Insert new
-      const inserted = await insertIntoTable<BusinessDay>("business_days", { day, status });
+      const inserted = await insertIntoTable<BusinessDay>("business_days", { day, status, staff_id: staffId });
       return inserted;
     }
   } catch (error) {
@@ -111,9 +127,9 @@ export async function upsertBusinessDay(
  * Delete business day (remove from table via Edge Function)
  * If the record doesn't exist, it's treated as success (idempotent operation)
  */
-export async function deleteBusinessDay(day: string): Promise<void> {
+export async function deleteBusinessDay(day: string, staffId: string): Promise<void> {
   try {
-    await deleteFromTable("business_days", { day });
+    await deleteFromTable("business_days", { day, staff_id: staffId });
   } catch (error) {
     // If the error indicates the record doesn't exist, treat it as success
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -172,18 +188,18 @@ export async function getBusinessHoursOverrides(
  * Upsert business hours override (via Edge Function)
  */
 export async function upsertBusinessHoursOverride(
-  override: BusinessHoursOverrideInsert
+  override: BusinessHoursOverrideInsert & { staff_id: string } // staff_id is required
 ): Promise<BusinessHoursOverride> {
   try {
-    // Check if exists
+    // Check if exists for this staff_id
     const existing = await selectFromTable<BusinessHoursOverride>("business_hours_overrides", {
-      where: { day: override.day },
+      where: { day: override.day, staff_id: override.staff_id },
       limit: 1
     });
 
     if (existing && existing.length > 0) {
       // Update existing
-      const updated = await updateTable<BusinessHoursOverride>("business_hours_overrides", override, { day: override.day });
+      const updated = await updateTable<BusinessHoursOverride>("business_hours_overrides", override, { day: override.day, staff_id: override.staff_id });
       return updated[0];
     } else {
       // Insert new
@@ -199,9 +215,9 @@ export async function upsertBusinessHoursOverride(
  * Delete business hours override (via Edge Function)
  * If the record doesn't exist, it's treated as success (idempotent operation)
  */
-export async function deleteBusinessHoursOverride(day: string): Promise<void> {
+export async function deleteBusinessHoursOverride(day: string, staffId: string): Promise<void> {
   try {
-    await deleteFromTable("business_hours_overrides", { day });
+    await deleteFromTable("business_hours_overrides", { day, staff_id: staffId });
   } catch (error) {
     // If error is about no rows being affected, treat as success (idempotent)
     const errorMsg = error instanceof Error ? error.message.toLowerCase() : "";
