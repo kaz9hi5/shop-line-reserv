@@ -153,18 +153,40 @@ Deno.serve(async (req) => {
             throw new Error("table is required for select operation");
           }
 
-          if (isUnauthorized) {
-            throw new Error("Unauthorized");
-          }
+          // Check if current IP is in allowlist (for IP management page access)
+          const { data: ipCheck } = await supabase
+            .from("admin_allowed_ips")
+            .select("ip")
+            .eq("ip", clientIp)
+            .maybeSingle();
           
-          // Check permissions: staff can only select from reservations, business_days, and business_hours_overrides
-          if (isStaff && !["reservations", "business_days", "business_hours_overrides"].includes(table)) {
-            throw new Error(`Staff can only select from reservations, business_days, and business_hours_overrides tables. Attempted to access: ${table}`);
-          }
+          const isIpInAllowlist = !!ipCheck;
+          
+          // Special handling for admin_allowed_ips and staff tables: allow access if IP is in allowlist
+          // This is needed for IP management page to function properly
+          // admin_allowed_ips is a simple whitelist and should be accessible even if staff_id is not linked
+          // staff table access is needed for IP management page to display staff list and link IPs to staff
+          if (table === "admin_allowed_ips" || table === "staff") {
+            if (!isIpInAllowlist) {
+              throw new Error("Unauthorized");
+            }
+            // IP is in allowlist, allow select operation
+            // Skip role-based checks for admin_allowed_ips and staff select when IP is in allowlist
+          } else {
+            // For other tables, check authorization
+            if (isUnauthorized) {
+              throw new Error("Unauthorized");
+            }
+            
+            // Check permissions: staff can only select from reservations, business_days, and business_hours_overrides
+            if (isStaff && !["reservations", "business_days", "business_hours_overrides"].includes(table)) {
+              throw new Error(`Staff can only select from reservations, business_days, and business_hours_overrides tables. Attempted to access: ${table}`);
+            }
 
-          // Manager-only tables
-          if (!isManager && ["staff"].includes(table)) {
-            throw new Error(`Only manager can access table: ${table}`);
+            // Manager-only tables (excluding staff, which is handled above)
+            if (!isManager && ["staff"].includes(table)) {
+              throw new Error(`Only manager can access table: ${table}`);
+            }
           }
           
           let selectQuery = supabase.from(table).select(query?.select || "*");
@@ -238,17 +260,37 @@ Deno.serve(async (req) => {
             throw new Error("table and updates are required for update operation");
           }
 
-          if (isUnauthorized) {
-            throw new Error("Unauthorized");
-          }
+          // Check if current IP is in allowlist (for IP management page access)
+          const { data: ipCheckForUpdate } = await supabase
+            .from("admin_allowed_ips")
+            .select("ip")
+            .eq("ip", clientIp)
+            .maybeSingle();
           
-          // Check permissions: staff can update reservations, business_days, and business_hours_overrides
-          if (isStaff && !["reservations", "business_days", "business_hours_overrides"].includes(table)) {
-            throw new Error("Staff can only update reservations, business_days, and business_hours_overrides tables");
-          }
+          const isIpInAllowlistForUpdate = !!ipCheckForUpdate;
+          
+          // Special handling for admin_allowed_ips: allow update if IP is in allowlist
+          // This is needed for IP management page to link staff_id to IP addresses
+          if (table === "admin_allowed_ips") {
+            if (!isIpInAllowlistForUpdate) {
+              throw new Error("Unauthorized");
+            }
+            // IP is in allowlist, allow update operation
+            // Skip role-based checks for admin_allowed_ips update when IP is in allowlist
+          } else {
+            // For other tables, check authorization
+            if (isUnauthorized) {
+              throw new Error("Unauthorized");
+            }
+            
+            // Check permissions: staff can update reservations, business_days, and business_hours_overrides
+            if (isStaff && !["reservations", "business_days", "business_hours_overrides"].includes(table)) {
+              throw new Error("Staff can only update reservations, business_days, and business_hours_overrides tables");
+            }
 
-          if (!isManager && ["staff"].includes(table)) {
-            throw new Error(`Only manager can update table: ${table}`);
+            if (!isManager && ["staff"].includes(table)) {
+              throw new Error(`Only manager can update table: ${table}`);
+            }
           }
           
           // Remove deleted_at from updates if table doesn't have this column
@@ -289,16 +331,24 @@ Deno.serve(async (req) => {
             throw new Error("table is required for delete operation");
           }
 
-          // admin_allowed_ips deletion is manager-only
-          // Check this BEFORE isUnauthorized check, because the IP being deleted might not be in the allowlist
+          // Check if current IP is in allowlist (for IP management page access)
+          const { data: ipCheckForDelete } = await supabase
+            .from("admin_allowed_ips")
+            .select("ip")
+            .eq("ip", clientIp)
+            .maybeSingle();
+          
+          const isIpInAllowlistForDelete = !!ipCheckForDelete;
+
+          // Special handling for admin_allowed_ips: allow delete if IP is in allowlist
+          // This is needed for IP management page to delete IP addresses
+          // admin_allowed_ips is a simple whitelist and should be deletable even if staff_id is not linked
           if (table === "admin_allowed_ips") {
-            // For admin_allowed_ips deletion, we need to check if the requester is a manager
-            // by checking if their current IP/device is in the allowlist with manager role
-            if (!isManager) {
-              throw new Error("Only manager can delete admin_allowed_ips");
+            if (!isIpInAllowlistForDelete) {
+              throw new Error("Unauthorized");
             }
-            // Skip isUnauthorized check for admin_allowed_ips deletion
-            // (the IP being deleted might not be in the allowlist, but the requester must be a manager)
+            // IP is in allowlist, allow delete operation
+            // Skip role-based checks for admin_allowed_ips delete when IP is in allowlist
           } else {
             // For other tables, check isUnauthorized first
             if (isUnauthorized) {
@@ -453,8 +503,22 @@ Deno.serve(async (req) => {
             function_name,
             rpc_params || {}
           );
-          result = rpcData;
-          error = rpcError;
+          
+          // For gate_add_allowed_ip, false is a valid response (manager name mismatch)
+          // Don't treat it as an error
+          if (function_name === "gate_add_allowed_ip") {
+            if (rpcError) {
+              result = false;
+              error = rpcError;
+            } else {
+              // rpcData can be true or false, both are valid responses
+              result = rpcData;
+              error = null;
+            }
+          } else {
+            result = rpcData;
+            error = rpcError;
+          }
           break;
 
         default:
@@ -467,6 +531,23 @@ Deno.serve(async (req) => {
     if (error) {
       const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
       console.error("Database operation error:", errorMessage);
+      
+      // For gate_add_allowed_ip, return 200 even on error (false is a valid response)
+      // This allows the gate to handle manager name mismatch gracefully
+      if (payload.operation === "rpc" && payload.function_name === "gate_add_allowed_ip") {
+        return new Response(
+          JSON.stringify({ 
+            ok: true, 
+            data: false,
+            role: role || "unauthorized"
+          }),
+          {
+            status: 200,
+            headers: { ...corsHeaders, "content-type": "application/json" }
+          }
+        );
+      }
+      
       return new Response(
         JSON.stringify({ 
           ok: false, 

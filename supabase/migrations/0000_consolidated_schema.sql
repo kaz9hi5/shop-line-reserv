@@ -60,7 +60,7 @@ create table if not exists public.admin_allowed_ips (
   ip text primary key,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  device_fingerprint text,
+  device_fingerprint text
   staff_id uuid references public.staff (id)
 );
 

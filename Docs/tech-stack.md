@@ -210,6 +210,16 @@ const { data, error } = await supabase
   - 許可 IP アドレスリストの管理画面
   - IP の削除（拒否）と、`admin_allowed_ips.staff_id` の編集（スタッフ紐づけ編集）
   - 現在の IP アドレスの自動検出と表示
+  - 店長のIPアドレスは自動的に店長の`staff_id`に紐付けられる（`staff_id`が`null`の場合のみ）
+
+- **AdminNav** (`web/src/components/admin/AdminNav.tsx`)
+  - 管理画面のナビゲーションメニュー
+  - アクセス許可画面（IP管理画面）にいる時は、以下のリンクを無効化して画面遷移をブロック：
+    - 「本日の予約一覧と予約受付」（`/admin`）
+    - 「営業時間と日別営業時間の設定」（`/admin/settings`）
+    - 「施術メニュー編集」（`/admin/treatments`）
+    - 「メンバー編集」（`/admin/members`）
+  - IP管理画面にいる時は常にこれらのリンクが無効化され、警告メッセージを表示
 
 ### 開発ツール
 
@@ -309,9 +319,11 @@ supabase/
 2. **`admin_allowed_ips`** - 管理画面アクセス許可 IP（ホワイトリスト）
 
    - IP アドレス（主キー）、物理削除対応
-   - `role` カラム（`manager` または `staff`）- 店長・店員の権限管理
    - `device_fingerprint` カラム - 端末識別用のデバイスフィンガープリント（管理画面トップアクセスのたびに更新）
+   - `staff_id` カラム - スタッフテーブルへの外部キー（オプショナル）
+   - **ロールの取得**: `staff_id`が紐づいている場合は`staff.role`からロールを取得（`manager`または`staff`）
    - **ホワイトリスト機能**: このテーブルに登録されている IP アドレスのみ管理画面にアクセス可能
+   - **アクセス許可画面からの遷移制御**: `admin_allowed_ips.staff_id`が設定されていて`staff.name`が設定されている場合のみ、アクセス許可画面から他の画面への遷移が許可される
 
 3. **`staff`** - 店員テーブル（新規追加）
 
@@ -418,8 +430,9 @@ supabase/
 
 **`0005_admin_role_and_device.sql` - 店長・店員の権限管理**
 
-- `admin_allowed_ips` テーブルに `role` カラムを追加（`manager` または `staff`）
-- `device_fingerprint` カラムを追加（端末識別用）
+- `admin_allowed_ips` テーブルに `device_fingerprint` カラムを追加（端末識別用）
+- `admin_allowed_ips` テーブルに `staff_id` カラムを追加（スタッフテーブルへの外部キー）
+- ロールは`staff_id`が紐づいている場合は`staff.role`から取得（`manager`または`staff`）
 - 端末情報による店長・店員の区別を可能にする
 
 **`0006_rls_role_based.sql` - ロールベースの RLS ポリシー**
@@ -450,7 +463,7 @@ supabase/
 
 - **機能**: 端末情報を取得して権限チェックを行い、データベース操作を実行
 - **端末識別**: User-Agent、Accept-Language、Accept-Encoding からデバイスフィンガープリントを生成
-- **権限チェック**: `admin_allowed_ips` テーブルから IP アドレスまたはデバイスフィンガープリントでロールを取得
+- **権限チェック**: `admin_allowed_ips` テーブルから IP アドレスでレコードを取得し、`staff_id`が紐づいている場合は`staff`テーブルからロールを取得
 - **ロールベースアクセス制御**:
   - 店員（`staff`）: `reservations`、`business_days`、`business_hours_overrides` テーブルのみアクセス可能
   - 店長（`manager`）: すべてのテーブルにアクセス可能

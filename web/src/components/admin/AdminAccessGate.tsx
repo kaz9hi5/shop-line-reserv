@@ -86,7 +86,7 @@ export function AdminAccessGate({ children }: { children: React.ReactNode }) {
           この IP（<span className="font-semibold">{currentIp}</span>）は許可リストに存在しないため、管理画面へアクセスできません。（IPの再取得まで{secondsUntilNextRefresh}秒）
         </p>
         <div className="mt-3 rounded-xl bg-slate-50 p-3 ring-1 ring-slate-200/70">
-          <div className="text-xs font-semibold text-slate-600">店長名（確認）</div>
+          <div className="text-xs font-semibold text-slate-600">店員のお一人である事を確認します。店長名を入力してボタンを押してください。</div>
           <div className="mt-2 flex gap-2">
             <input
               value={managerName}
@@ -100,7 +100,7 @@ export function AdminAccessGate({ children }: { children: React.ReactNode }) {
                 try {
                   const input = managerName.trim();
                   if (!input) {
-                    alert("店長名を入力してください。");
+                    alert("入力してからボタン押してください。");
                     return;
                   }
                   setVerifying(true);

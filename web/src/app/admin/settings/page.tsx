@@ -16,7 +16,7 @@ import {
   upsertBusinessHoursOverride,
   deleteBusinessHoursOverride
 } from "@/lib/settings";
-import { getActiveStaff, getCurrentStaffId } from "@/lib/staff";
+import { getActiveStaff, getCurrentStaffId, getCurrentStaffInfo } from "@/lib/staff";
 import type { StaffRow } from "@/lib/staff";
 import type { BusinessDay } from "@/lib/settings";
 
@@ -115,6 +115,7 @@ export default function AdminSettingsPage() {
   const [staffList, setStaffList] = useState<StaffRow[]>([]);
   const [selectedDayStaffStatus, setSelectedDayStaffStatus] = useState<BusinessDay[]>([]);
   const [currentStaffId, setCurrentStaffId] = useState<string | null>(null);
+  const [staffInfo, setStaffInfo] = useState<{ role: "manager" | "staff" } | null>(null);
 
   // Load settings
   useEffect(() => {
@@ -130,15 +131,30 @@ export default function AdminSettingsPage() {
           setCurrentStaffId(staffId);
         }
 
-        // Load app settings
-        const settings = await getAppSettings();
+        // Get current user's staff info (for role check)
+        const info = await getCurrentStaffInfo();
         if (!cancelled) {
-          setOpenTime(settings.default_open_time);
-          setCloseTime(settings.default_close_time);
-          setDeadlineHours(settings.reservation_deadline_hours);
-          setLunchEnabled(settings.default_lunch_enabled);
-          setLunchStart(settings.default_lunch_start || "12:00");
-          setLunchEnd(settings.default_lunch_end || "13:00");
+          if (info && info.role) {
+            setStaffInfo({ role: info.role });
+          } else {
+            setStaffInfo(null);
+          }
+        }
+
+        // Load app settings (for both manager and staff - staff is read-only)
+        try {
+          const settings = await getAppSettings();
+          if (!cancelled) {
+            setOpenTime(settings.default_open_time);
+            setCloseTime(settings.default_close_time);
+            setDeadlineHours(settings.reservation_deadline_hours);
+            setLunchEnabled(settings.default_lunch_enabled);
+            setLunchStart(settings.default_lunch_start || "12:00");
+            setLunchEnd(settings.default_lunch_end || "13:00");
+          }
+        } catch (settingsError) {
+          // If settings load fails, skip it
+          console.warn("Failed to load app settings:", settingsError);
         }
 
         // Load business days for month (filter by current user's staff_id)
@@ -225,10 +241,17 @@ export default function AdminSettingsPage() {
     };
   }, [selectedYmd]);
 
-  const unsetCount = useMemo(
-    () => monthDays.filter((d) => (dayStatus[formatYmd(d)] ?? "unset") === "unset").length,
-    [monthDays, dayStatus]
-  );
+  const unsetCount = useMemo(() => {
+    const todayYmd = formatYmd(new Date());
+    return monthDays.filter((d) => {
+      const ymd = formatYmd(d);
+      // 過去日はカウントから除外
+      if (ymd < todayYmd) {
+        return false;
+      }
+      return (dayStatus[ymd] ?? "unset") === "unset";
+    }).length;
+  }, [monthDays, dayStatus]);
 
   const handleSave = async () => {
     try {
@@ -238,15 +261,17 @@ export default function AdminSettingsPage() {
       // Get current user's staff ID
       const staffId = await getCurrentStaffId();
 
-      // Save app settings
-      await updateAppSettings({
-        default_open_time: openTime,
-        default_close_time: closeTime,
-        reservation_deadline_hours: deadlineHours,
-        default_lunch_enabled: lunchEnabled,
-        default_lunch_start: lunchEnabled ? lunchStart : null,
-        default_lunch_end: lunchEnabled ? lunchEnd : null
-      });
+      // Save app settings (only for manager)
+      if (staffInfo?.role === "manager") {
+        await updateAppSettings({
+          default_open_time: openTime,
+          default_close_time: closeTime,
+          reservation_deadline_hours: deadlineHours,
+          default_lunch_enabled: lunchEnabled,
+          default_lunch_start: lunchEnabled ? lunchStart : null,
+          default_lunch_end: lunchEnabled ? lunchEnd : null
+        });
+      }
 
       // Save business days
       for (const d of monthDays) {
@@ -338,7 +363,14 @@ export default function AdminSettingsPage() {
                   type="time"
                   value={openTime}
                   onChange={(e) => setOpenTime(e.target.value)}
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                  disabled={staffInfo?.role === "staff"}
+                  readOnly={staffInfo?.role === "staff"}
+                  className={[
+                    "h-10 w-full rounded-xl border border-slate-200 px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50",
+                    staffInfo?.role === "staff"
+                      ? "bg-slate-50 text-slate-600 cursor-not-allowed"
+                      : "bg-white text-slate-800"
+                  ].join(" ")}
                 />
               </Field>
               <Field label="終了">
@@ -346,7 +378,14 @@ export default function AdminSettingsPage() {
                   type="time"
                   value={closeTime}
                   onChange={(e) => setCloseTime(e.target.value)}
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                  disabled={staffInfo?.role === "staff"}
+                  readOnly={staffInfo?.role === "staff"}
+                  className={[
+                    "h-10 w-full rounded-xl border border-slate-200 px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50",
+                    staffInfo?.role === "staff"
+                      ? "bg-slate-50 text-slate-600 cursor-not-allowed"
+                      : "bg-white text-slate-800"
+                  ].join(" ")}
                 />
               </Field>
             </div>
@@ -357,12 +396,20 @@ export default function AdminSettingsPage() {
                   <div className="text-sm font-semibold text-slate-800">昼休憩（デフォルト）</div>
                   <div className="text-xs text-slate-500">任意（ON の場合は昼休憩時間を予約不可にします）</div>
                 </div>
-                <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                <label className={[
+                  "flex items-center gap-2 text-sm font-medium",
+                  staffInfo?.role === "staff" ? "text-slate-600" : "text-slate-700"
+                ].join(" ")}>
                   <input
                     type="checkbox"
                     checked={lunchEnabled}
                     onChange={(e) => setLunchEnabled(e.target.checked)}
-                    className="h-5 w-5 rounded border-slate-300 text-slate-900"
+                    disabled={staffInfo?.role === "staff"}
+                    readOnly={staffInfo?.role === "staff"}
+                    className={[
+                      "h-5 w-5 rounded border-slate-300 text-slate-900",
+                      staffInfo?.role === "staff" ? "cursor-not-allowed" : ""
+                    ].join(" ")}
                   />
                   {lunchEnabled ? "ON" : "OFF"}
                 </label>
@@ -374,14 +421,28 @@ export default function AdminSettingsPage() {
                       type="time"
                       value={lunchStart}
                       onChange={(e) => setLunchStart(e.target.value)}
-                      className="h-9 w-[120px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                      disabled={staffInfo?.role === "staff"}
+                      readOnly={staffInfo?.role === "staff"}
+                      className={[
+                        "h-9 w-[120px] rounded-xl border border-slate-200 px-2 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50",
+                        staffInfo?.role === "staff"
+                          ? "bg-slate-50 text-slate-600 cursor-not-allowed"
+                          : "bg-white text-slate-800"
+                      ].join(" ")}
                     />
                     <span className="text-xs text-slate-500">–</span>
                     <input
                       type="time"
                       value={lunchEnd}
                       onChange={(e) => setLunchEnd(e.target.value)}
-                      className="h-9 w-[120px] rounded-xl border border-slate-200 bg-white px-2 text-xs text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
+                      disabled={staffInfo?.role === "staff"}
+                      readOnly={staffInfo?.role === "staff"}
+                      className={[
+                        "h-9 w-[120px] rounded-xl border border-slate-200 px-2 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50",
+                        staffInfo?.role === "staff"
+                          ? "bg-slate-50 text-slate-600 cursor-not-allowed"
+                          : "bg-white text-slate-800"
+                      ].join(" ")}
                     />
                   </div>
                 ) : (
@@ -402,9 +463,17 @@ export default function AdminSettingsPage() {
                 max={48}
                 value={deadlineHours}
                 onChange={(e) => setDeadlineHours(Number(e.target.value))}
-                className="w-full"
+                disabled={staffInfo?.role === "staff"}
+                readOnly={staffInfo?.role === "staff"}
+                className={[
+                  "w-full",
+                  staffInfo?.role === "staff" ? "cursor-not-allowed" : ""
+                ].join(" ")}
               />
-              <div className="w-20 text-right text-sm font-semibold text-slate-800">
+              <div className={[
+                "w-20 text-right text-sm font-semibold",
+                staffInfo?.role === "staff" ? "text-slate-600" : "text-slate-800"
+              ].join(" ")}>
                 {deadlineHours}時間前まで
               </div>
             </div>
@@ -438,14 +507,13 @@ export default function AdminSettingsPage() {
             </div>
           }
         >
-          <div className="mt-4 rounded-xl bg-amber-50 p-3 ring-1 ring-amber-200/70">
-            <span className="text-sm leading-6 text-slate-600">営業日設定は日付単位で行います。</span>
+          <p className="text-sm leading-6 text-slate-600">営業日設定は日付単位で行います。
           {unsetCount > 0 ? (
               <span className="text-xs leading-5 text-amber-900">
                 この月に未設定の日付が {unsetCount} 件あります（予約画面には表示されません）。
               </span>
           ) : null}
-          </div>
+          </p>
 
           <div className="mt-4 flex flex-col gap-3">
             <div className="overflow-hidden rounded-2xl bg-white ring-1 ring-slate-200/70">
@@ -460,6 +528,9 @@ export default function AdminSettingsPage() {
                   const inMonth = d.getMonth() === currentDate.getMonth();
                   const status = dayStatus[ymd] ?? "unset";
                   const active = ymd === selectedYmd;
+                  // 過去日かどうかをチェック（文字列として比較）
+                  const todayYmd = formatYmd(new Date());
+                  const isPastDate = ymd < todayYmd;
                   const color =
                     status === "open"
                       ? "bg-emerald-50"
@@ -471,12 +542,13 @@ export default function AdminSettingsPage() {
                       key={ymd}
                       type="button"
                       onClick={() => setSelectedYmd(ymd)}
+                      disabled={isPastDate}
                       className={[
                         "min-h-12 px-2 py-2 text-left text-xs",
                         color,
                         inMonth ? "text-slate-800" : "text-slate-400",
                         active ? "ring-2 ring-slate-900/30" : "ring-0",
-                        "hover:bg-slate-50 focus:outline-none"
+                        isPastDate ? "opacity-50 cursor-not-allowed" : "hover:bg-slate-50 focus:outline-none"
                       ].join(" ")}
                     >
                       <div className="flex items-center justify-between">
@@ -502,22 +574,39 @@ export default function AdminSettingsPage() {
 
             <div className="rounded-2xl bg-white p-3 ring-1 ring-slate-200/70">
               <div className="text-sm font-semibold text-slate-800">選択日：{selectedYmd}</div>
+              {(() => {
+                // 過去日かどうかをチェック（文字列として比較）
+                const todayYmd = formatYmd(new Date());
+                const isPastDate = selectedYmd < todayYmd;
+                return isPastDate ? (
+                  <div className="mt-2 rounded-xl bg-amber-50 px-2 py-1.5 ring-1 ring-amber-200/70">
+                    <div className="text-xs text-amber-800">過去日は変更できません</div>
+                  </div>
+                ) : null;
+              })()}
               <div className="mt-3">
                 <div className="mb-1 text-xs font-semibold text-slate-600">状態</div>
                 <div className="flex items-start gap-2">
-                  <select
-                    value={dayStatus[selectedYmd] ?? "unset"}
-                    onChange={(e) =>
-                      setDayStatus((prev) => ({ ...prev, [selectedYmd]: e.target.value as DayStatus }))
-                    }
-                    className="h-10 flex-1 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50"
-                  >
-                    <option value="unset">未設定（非表示）</option>
-                    <option value="open">営業日（予約可）</option>
-                    <option value="holiday">休日（表示/予約不可）</option>
-                    <option value="closed">定休日（表示/予約不可）</option>
-                  </select>
-                  <div className="flex flex-col gap-1 min-w-[120px]">
+                  <div className="flex-1">
+                    <select
+                      value={dayStatus[selectedYmd] ?? "unset"}
+                      onChange={(e) =>
+                        setDayStatus((prev) => ({ ...prev, [selectedYmd]: e.target.value as DayStatus }))
+                      }
+                      disabled={(() => {
+                        // 過去日は変更不可（文字列として比較）
+                        const todayYmd = formatYmd(new Date());
+                        return selectedYmd < todayYmd;
+                      })()}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-400/50 disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
+                    >
+                      <option value="unset">未設定（非表示）</option>
+                      <option value="open">営業日（予約可）</option>
+                      <option value="holiday">休日（表示/予約不可）</option>
+                      <option value="closed">定休日（表示/予約不可）</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1 flex-1">
                     {staffList.length > 0 ? (
                       <>
                         {(() => {
